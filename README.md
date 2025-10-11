@@ -10,7 +10,7 @@
 
 Cognautic CLI is a Python-based command-line interface that brings AI-powered development capabilities directly to your terminal. It provides agentic tools for file operations, command execution, web search, and code analysis with support for multiple AI providers. The tool is accessed through a single `cognautic` command with various subcommands.
 
-## 🚧 Coming Soon - Not Yet Released
+## ⚠️ Coming Soon - Not Yet Released
 
 > **IMPORTANT:** Cognautic CLI is currently in active development and **has not been released yet**. This documentation is a preview of upcoming features. The tool will be available for download soon. Follow this repository for updates on the release.
 
