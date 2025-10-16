@@ -10,10 +10,6 @@
 
 Cognautic CLI is a Python-based command-line interface that brings AI-powered development capabilities directly to your terminal. It provides agentic tools for file operations, command execution, web search, and code analysis with support for multiple AI providers. The tool is accessed through a single `cognautic` command with various subcommands.
 
-## ⚠️ Coming Soon - Not Yet Released
-
-> **IMPORTANT:** Cognautic CLI is currently in active development and **has not been released yet**. This documentation is a preview of upcoming features. The tool will be available for download soon. Follow this repository for updates on the release.
-
 > **⚠️ Development Notice:** Cognautic CLI is currently under development. Some features may be unavailable or subject to change.
 
 ### Project Information
@@ -32,6 +28,7 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 ## Features
 
 - **Multi-Provider AI Support**: Integrate with OpenAI, Anthropic, Google, Together AI, OpenRouter, and 15+ other AI providers
+- **Local Model Support**: Run free open-source Hugging Face models locally without API keys (NEW! 🎉)
 - **Agentic Tools**: File operations, command execution, web search, and code analysis
 - **Real-time Communication**: WebSocket server for live AI responses and tool execution
 - **Secure Configuration**: Encrypted API key storage and permission management
@@ -121,136 +118,122 @@ pipx uninstall cognautic-cli
 
 ---
 
-## Quick Start - The Easy Way
+## Quick Start
 
-The simplest way to use Cognautic CLI is to just run the main command and do everything interactively:
-
-### Step 1: Run Cognautic
+### Step 1: Install Cognautic CLI
 
 ```bash
-cognautic
+pip install cognautic_cli-x.x.x-py3-none-any.whl
 ```
 
-This single command launches the interactive Cognautic CLI interface where you can:
-
-- Set up your API keys on first run
-- Choose your preferred AI provider
-- Start chatting with AI agents
-- Build projects from natural language descriptions
-- Analyze existing code
-- Configure all settings
-
-### Step 2: Follow the Interactive Setup
-
-On first run, Cognautic will guide you through:
-
-1. Welcome screen and version check
-2. API key configuration for your preferred providers
-3. Basic preferences setup
-4. Quick tutorial of available commands
-
-### Step 3: Start Using AI
-
-Once inside the CLI, you can use simple commands like:
+### Step 2: Run Setup
 
 ```bash
-# Chat with AI
-/chat
-
-# Build a new project
-/build "Create a web scraper"
-
-# Analyze current directory
-/analyze
-
-# Get help
-/help
+cognautic setup --interactive
 ```
 
-**That's it!** No complex command-line arguments needed. Everything happens interactively within the Cognautic interface.
+This will guide you through:
+- Configuring API keys for your preferred AI providers
+- Setting default provider and model
+- Basic preferences
+
+### Step 3: Start Chatting
+
+```bash
+cognautic chat
+```
+
+Now you can chat with AI and use slash commands like:
+- `/help` - Show available commands
+- `/provider openai` - Switch AI provider
+- `/model gpt-4` - Change model
+- `/workspace ~/myproject` - Set working directory
+- `/lmodel microsoft/phi-2` - Load local model
+
+**That's it!** Start chatting and let the AI help you code.
 
 ---
 
-## Interactive Commands
+## Available Slash Commands
 
-Once you run `cognautic`, you'll be in the interactive CLI where you can use these simple commands:
+Once you're in chat mode (`cognautic chat`), use these commands:
 
-### Chat Commands
+### Workspace & Configuration
 
 ```bash
-/chat                # Start chatting with AI
-/chat anthropic      # Chat with specific provider
-/switch openai       # Switch AI provider
-/model gpt-4         # Change model
+/workspace <path>    # Change working directory (alias: /ws)
+/setup               # Run interactive setup wizard
+/config list         # Show current configuration
+/config set <key> <value>  # Set configuration value
+/help                # Show all available commands
 ```
 
-### Project Building
+### AI Provider & Model Management
 
 ```bash
-/build "description" # Build project from description
-/build               # Interactive project builder
-/template web        # Use project template
+/provider [name]     # Switch AI provider (openai, anthropic, google, etc.)
+/model [model_id]    # Switch AI model
+/model list          # Fetch available models from provider's API
+/lmodel <path>       # Load local Hugging Face model
+/lmodel unload       # Unload current local model
 ```
 
-### Code Analysis
+### Session Management
 
 ```bash
-/analyze             # Analyze current directory
-/analyze ./path      # Analyze specific path
-/suggestions         # Get improvement suggestions
-/security            # Security analysis
+/session             # Show current session info
+/session list        # List all sessions
+/session new         # Create new session
+/session load <id>   # Load existing session
+/session delete <id> # Delete session
+/session title <text> # Update session title
 ```
 
-### Configuration
+### Display & Interface
 
 ```bash
-/setup               # Run setup wizard
-/providers           # List available providers
-/keys                # Manage API keys
-/settings            # View/change settings
-/help                # Show all commands
-/exit                # Exit Cognautic
+/speed [instant|fast|normal|slow]  # Set typing speed
+/clear               # Clear chat screen
+/exit or /quit       # Exit chat session
 ```
 
 ---
 
-## Advanced Command-Line Usage
+## Command-Line Usage
 
-For automation and scripting, you can also use Cognautic with direct command-line arguments:
+Cognautic CLI provides these main commands:
 
-### Setup
+### Setup Command
 
 ```bash
-cognautic setup --interactive           # Interactive setup
+cognautic setup --interactive           # Interactive setup wizard
 cognautic setup --provider openai       # Quick provider setup
 ```
 
-### Direct Chat
+### Chat Command
 
 ```bash
-cognautic chat --provider anthropic --model claude-3-sonnet
-cognautic chat --project-path ./my_project
+cognautic chat                          # Start interactive chat
+cognautic chat --provider anthropic     # Chat with specific provider
+cognautic chat --model claude-3-sonnet  # Chat with specific model
+cognautic chat --project-path ./my_project  # Set workspace
+cognautic chat --session <id>           # Continue existing session
 ```
 
-### Direct Build
+### Config Command
 
 ```bash
-cognautic build "Create a FastAPI web app" --language python
-cognautic build "React dashboard" --framework react --output-dir ./dashboard
+cognautic config list                   # Show all configuration
+cognautic config set <key> <value>      # Set configuration value
+cognautic config get <key>              # Get configuration value
+cognautic config delete <key>           # Delete configuration key
+cognautic config reset                  # Reset to defaults
 ```
 
-### Direct Analysis
+### Providers Command
 
 ```bash
-cognautic analyze ./my_project --suggestions
-cognautic analyze . --focus security --output-format json
-```
-
-### Provider Management
-
-```bash
-cognautic providers                              # List all providers
-cognautic config set default_provider anthropic
+cognautic providers                     # List all AI providers and endpoints
 ```
 
 ---
@@ -264,6 +247,37 @@ cognautic config set default_provider anthropic
 | **Google** | Gemini models | `GOOGLE_API_KEY` |
 | **Together AI** | Various open-source models | `TOGETHER_API_KEY` |
 | **OpenRouter** | Access to multiple providers | `OPENROUTER_API_KEY` |
+| **Local Models** | Hugging Face models (Llama, Mistral, Phi, etc.) | ❌ No API key needed! |
+
+### Using Local Models (NEW! 🎉)
+
+Run free open-source AI models locally without any API keys:
+
+```bash
+# Install dependencies
+pip install transformers torch accelerate
+
+# Start chat and load a local model
+cognautic chat
+/lmodel microsoft/phi-2
+/provider local
+
+# Now chat with your local model!
+```
+
+**Popular local models:**
+- `microsoft/phi-2` - Small and fast (2.7B)
+- `TinyLlama/TinyLlama-1.1B-Chat-v1.0` - Ultra lightweight (1.1B)
+- `meta-llama/Llama-2-7b-chat-hf` - High quality (7B)
+- `mistralai/Mistral-7B-Instruct-v0.2` - Excellent performance (7B)
+
+**Benefits:**
+- ✅ Complete privacy - no data sent externally
+- ✅ No API costs
+- ✅ Works offline
+- ✅ Full control over model behavior
+
+📖 **[Read the full Local Models Guide →](LOCAL_MODELS.md)**
 
 ---
 
@@ -294,7 +308,6 @@ cognautic --help
 
 # Show help for specific command
 cognautic chat --help
-cognautic build --help
 ```
 
 ### Version Information
@@ -305,30 +318,116 @@ cognautic --version
 
 ---
 
-## Examples
+## WebSocket Server & Real-time Streaming
 
-### Simple Interactive Session
+Cognautic CLI includes a powerful WebSocket server that enables **real-time, streaming AI responses**. Instead of waiting for the complete response, you receive AI-generated content as it's being produced, providing a much more interactive experience.
 
-The easiest way to get started:
+### Starting the WebSocket Server
+
+The WebSocket server starts automatically when you run chat mode:
 
 ```bash
-$ cognautic
-🚀 Welcome to Cognautic CLI
-📁 Current directory: /home/user/projects
-💡 Type '/help' for commands, '/exit' to quit
+# Start with default settings (port 8765)
+cognautic chat
 
-cognautic> /build "Create a simple todo app in Python"
-🤖 Building your project...
-✅ Created todo_app/ with 5 files
+# Specify custom port
+cognautic chat --websocket-port 9000
 
-cognautic> /analyze todo_app
-🔍 Analyzing code structure...
-✅ Analysis complete. Found 3 suggestions.
+# With specific provider and model
+cognautic chat --provider openai --model gpt-4o-mini --websocket-port 8765
+```
 
-cognautic> /chat
-💬 Starting chat session...
-You: How can I add a database to this todo app?
-AI: I can help you integrate SQLite...
+### Key Features
+
+- ✨ **Real-time Streaming**: AI responses stream chunk-by-chunk as they're generated
+- 🔄 **Bi-directional**: Full duplex WebSocket communication
+- 🔐 **Session Management**: Automatic session creation and context preservation
+- 🤖 **Multi-provider**: Works with all supported AI providers
+- 🛠️ **Tool Execution**: Execute tools and file operations via WebSocket
+
+### Client Examples
+
+**Python Client:**
+```bash
+python examples/websocket_client_example.py
+
+# Interactive mode
+python examples/websocket_client_example.py interactive
+```
+
+**Web Browser:**
+```bash
+# Open in your browser
+open examples/websocket_client.html
+```
+
+### Basic Usage Example
+
+```python
+import asyncio
+import json
+import websockets
+
+async def chat():
+    uri = "ws://localhost:8765"
+    async with websockets.connect(uri) as ws:
+        # Receive welcome message
+        welcome = json.loads(await ws.recv())
+        print(f"Connected! Session: {welcome['session_id']}")
+        
+        # Send chat message with streaming enabled
+        await ws.send(json.dumps({
+            "type": "chat",
+            "message": "Explain Python async/await",
+            "stream": true
+        }))
+        
+        # Receive streaming response in real-time
+        while True:
+            response = json.loads(await ws.recv())
+            
+            if response['type'] == 'stream_chunk':
+                print(response['chunk'], end='', flush=True)
+            elif response['type'] == 'stream_end':
+                break
+
+asyncio.run(chat())
+```
+
+### API Documentation
+
+For complete WebSocket API documentation, see **[WEBSOCKET_API.md](WEBSOCKET_API.md)**.
+
+---
+
+## Examples
+
+### Simple Chat Session
+
+Start chatting with AI:
+
+```bash
+$ cognautic chat
+ ██████╗ ██████╗  ██████╗ ███╗   ██╗ █████╗ ██╗   ██╗████████╗██╗ ██████╗
+██╔════╝██╔═══██╗██╔════╝ ████╗  ██║██╔══██╗██║   ██║╚══██╔══╝██║██╔════╝
+██║     ██║   ██║██║  ███╗██╔██╗ ██║███████║██║   ██║   ██║   ██║██║     
+██║     ██║   ██║██║   ██║██║╚██╗██║██╔══██║██║   ██║   ██║   ██║██║     
+╚██████╗╚██████╔╝╚██████╔╝██║ ╚████║██║  ██║╚██████╔╝   ██║   ██║╚██████╗
+ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═╝ ╚═════╝
+
+💡 Type '/help' for commands, 'exit' to quit
+🌐 WebSocket server: ws://localhost:8765
+📁 Workspace: /home/user/projects
+--------------------------------------------------
+
+You [projects]: Can you help me create a Python function?
+AI: Of course! I'd be happy to help you create a Python function...
+
+You [projects]: /workspace ~/myproject
+✅ Workspace changed to: /home/user/myproject
+
+You [myproject]: Create a file called utils.py with helper functions
+AI: I'll create that file for you...
 ```
 
 ### First-Time Setup
@@ -351,29 +450,46 @@ Choice [1-4]: 2
 🚀 Setup complete! You're ready to go.
 ```
 
-### Building Different Project Types
+### Using Local Models
+
+Run AI models locally without API keys:
 
 ```bash
-cognautic> /build "React dashboard with charts"
-cognautic> /build "Python API with FastAPI"
-cognautic> /build "Node.js Discord bot"
-cognautic> /template # Browse templates
-cognautic> /build     # Interactive builder
+$ cognautic chat
+You: /lmodel microsoft/phi-2
+🔄 Loading local model from: microsoft/phi-2
+⏳ This may take a few minutes depending on model size...
+Loading local model from microsoft/phi-2 on cuda...
+✅ Model loaded successfully on cuda
+✅ Local model loaded successfully!
+💡 Use: /provider local - to switch to the local model
+
+You: /provider local
+✅ Switched to provider: local
+
+You: Hello! Can you help me code?
+AI: Hello! Yes, I'd be happy to help you with coding...
 ```
 
-### Advanced Command-Line Usage
+### Working with Multiple Providers
 
-For scripting and automation:
+Switch between different AI providers:
 
 ```bash
-# Direct project creation
-cognautic build "FastAPI web app" --language python --output-dir ./api
+You: /provider openai
+✅ Switched to provider: openai
 
-# Batch analysis
-cognautic analyze ./projects --output-format json > analysis.json
+You: /model gpt-4o
+✅ Switched to model: gpt-4o
 
-# Automated chat session
-echo "Explain this code" | cognautic chat --project-path ./my_app
+You: Write a Python function to sort a list
+AI: Here's a Python function...
+
+You: /provider anthropic
+✅ Switched to provider: anthropic
+
+You: /model claude-3-sonnet-20240229
+✅ Switched to model: claude-3-sonnet-20240229
 ```
 
 ---
@@ -382,6 +498,6 @@ echo "Explain this code" | cognautic chat --project-path ./my_app
 
 Proprietary - All Rights Reserved
 
-© 2025 Cognautic Team
+© 2025 Cognautic
 
 For licensing inquiries, contact: cognautic@gmail.com
