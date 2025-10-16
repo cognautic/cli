@@ -272,10 +272,10 @@ cognautic chat
 - `mistralai/Mistral-7B-Instruct-v0.2` - Excellent performance (7B)
 
 **Benefits:**
-- ✅ Complete privacy - no data sent externally
-- ✅ No API costs
-- ✅ Works offline
-- ✅ Full control over model behavior
+- Complete privacy - no data sent externally
+- No API costs
+- Works offline
+- Full control over model behavior
 
 📖 **[Read the full Local Models Guide →](LOCAL_MODELS.md)**
 
@@ -339,11 +339,11 @@ cognautic chat --provider openai --model gpt-4o-mini --websocket-port 8765
 
 ### Key Features
 
-- ✨ **Real-time Streaming**: AI responses stream chunk-by-chunk as they're generated
-- 🔄 **Bi-directional**: Full duplex WebSocket communication
-- 🔐 **Session Management**: Automatic session creation and context preservation
-- 🤖 **Multi-provider**: Works with all supported AI providers
-- 🛠️ **Tool Execution**: Execute tools and file operations via WebSocket
+- **Real-time Streaming**: AI responses stream chunk-by-chunk as they're generated
+- **Bi-directional**: Full duplex WebSocket communication
+- **Session Management**: Automatic session creation and context preservation
+- **Multi-provider**: Works with all supported AI providers
+- **Tool Execution**: Execute tools and file operations via WebSocket
 
 ### Client Examples
 
