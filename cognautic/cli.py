@@ -65,6 +65,7 @@ from .config import ConfigManager
 from .ai_engine import AIEngine
 from .websocket_server import WebSocketServer
 from .memory import MemoryManager
+from .rules import RulesManager
 
 console = Console()
 
@@ -72,7 +73,7 @@ console = Console()
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.0.0", prog_name="Cognautic CLI")
+@click.version_option(version="1.1.0", prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -177,7 +178,6 @@ def chat(provider, model, project_path, websocket_port, session):
         
         try:
             console.print("💡 Type '/help' for commands, 'exit' to quit")
-            console.print(f"🌐 WebSocket server: ws://localhost:{websocket_port}")
             if project_path:
                 console.print(f"📁 Working in: {project_path}")
             
@@ -397,6 +397,88 @@ def providers():
         if 'auth_param' in config:
             console.print(f"Auth: [dim]URL parameter: {config['auth_param']}[/dim]")
 
+@main.command()
+@click.argument('action', required=False)
+@click.argument('rule_type', required=False)
+@click.argument('args', nargs=-1, required=False)
+@click.option('--workspace', '-w', help='Workspace path for workspace rules')
+def rules(action, rule_type, args, workspace):
+    """Manage global and workspace rules for AI behavior
+    
+    Examples:
+        cognautic rules                                    # List all rules
+        cognautic rules add global "Use type hints"       # Add global rule
+        cognautic rules add workspace "Follow PEP 8" -w . # Add workspace rule
+        cognautic rules remove global 0                   # Remove global rule by index
+        cognautic rules clear workspace -w .              # Clear workspace rules
+    """
+    rules_manager = RulesManager()
+    
+    if not action:
+        # Display all rules
+        rules_manager.display_rules(workspace)
+        console.print("\n💡 Usage:")
+        console.print("  cognautic rules add global <rule> [description]")
+        console.print("  cognautic rules add workspace <rule> [description] -w <path>")
+        console.print("  cognautic rules remove global <index>")
+        console.print("  cognautic rules remove workspace <index> -w <path>")
+        console.print("  cognautic rules clear global")
+        console.print("  cognautic rules clear workspace -w <path>")
+        return
+    
+    if action == "add":
+        if not rule_type or not args:
+            console.print("❌ Usage: cognautic rules add <global|workspace> <rule> [description]", style="red")
+            return
+        
+        # Join all args as the rule text
+        rule_text = " ".join(args)
+        
+        if rule_type == "global":
+            rules_manager.add_global_rule(rule_text)
+        elif rule_type == "workspace":
+            if not workspace:
+                workspace = os.getcwd()
+            rules_manager.add_workspace_rule(rule_text, workspace_path=workspace)
+        else:
+            console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+    
+    elif action == "remove":
+        if not rule_type or not args:
+            console.print("❌ Usage: cognautic rules remove <global|workspace> <index>", style="red")
+            return
+        
+        try:
+            index = int(args[0])
+            if rule_type == "global":
+                rules_manager.remove_global_rule(index)
+            elif rule_type == "workspace":
+                if not workspace:
+                    workspace = os.getcwd()
+                rules_manager.remove_workspace_rule(index, workspace)
+            else:
+                console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+        except (ValueError, IndexError):
+            console.print("❌ Index must be a valid number", style="red")
+    
+    elif action == "clear":
+        if not rule_type:
+            console.print("❌ Usage: cognautic rules clear <global|workspace>", style="red")
+            return
+        
+        if rule_type == "global":
+            rules_manager.clear_global_rules()
+        elif rule_type == "workspace":
+            if not workspace:
+                workspace = os.getcwd()
+            rules_manager.clear_workspace_rules(workspace)
+        else:
+            console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+    
+    else:
+        console.print(f"❌ Unknown action: {action}", style="red")
+        console.print("Valid actions: add, remove, clear")
+
 async def handle_slash_command(command, config_manager, ai_engine, context):
     """Handle slash commands in chat mode"""
     parts = command[1:].split()
@@ -472,14 +554,30 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         else:
             new_provider = parts[1]
             # Check if it's the local provider or has an API key
-            if new_provider == 'local' and 'local' in ai_engine.providers:
-                context['provider'] = new_provider
-                # Load saved model for this provider
-                saved_model = config_manager.get_provider_model(new_provider)
-                context['model'] = saved_model
-                console.print(f"✅ Switched to provider: {new_provider}")
-                if saved_model:
-                    console.print(f"📌 Using saved model: {saved_model}")
+            if new_provider == 'local':
+                # Check if local model is configured
+                local_model_path = config_manager.get_config_value('local_model_path')
+                if local_model_path:
+                    # Load the local model if not already loaded
+                    if 'local' not in ai_engine.providers:
+                        try:
+                            console.print(f"🔄 Loading local model from: {local_model_path}")
+                            ai_engine.load_local_model(local_model_path)
+                            console.print("✅ Local model loaded successfully!")
+                        except Exception as e:
+                            console.print(f"❌ Error loading local model: {e}", style="red")
+                            return True
+                    
+                    context['provider'] = new_provider
+                    # Load saved model for this provider
+                    saved_model = config_manager.get_provider_model(new_provider)
+                    context['model'] = saved_model
+                    console.print(f"✅ Switched to provider: {new_provider}")
+                    if saved_model:
+                        console.print(f"📌 Using saved model: {saved_model}")
+                else:
+                    console.print("❌ No local model configured", style="red")
+                    console.print("💡 Use /lmodel <path> to load a local model first", style="yellow")
             elif config_manager.has_api_key(new_provider):
                 context['provider'] = new_provider
                 # Load saved model for this provider
@@ -784,6 +882,87 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         
         return True
     
+    elif cmd == "rules" or cmd == "rule":
+        rules_manager = RulesManager()
+        current_workspace = context.get('current_workspace')
+        
+        if len(parts) < 2:
+            # Display all rules
+            rules_manager.display_rules(current_workspace)
+            console.print("\n💡 Commands:")
+            console.print("  /rules add global <rule> [description]")
+            console.print("  /rules add workspace <rule> [description]")
+            console.print("  /rules remove global <index>")
+            console.print("  /rules remove workspace <index>")
+            console.print("  /rules clear global")
+            console.print("  /rules clear workspace")
+        
+        elif parts[1] == "add":
+            if len(parts) < 4:
+                console.print("❌ Usage: /rules add <global|workspace> <rule> [description]", style="red")
+            else:
+                rule_type = parts[2].lower()
+                # Find where description starts (after the rule text)
+                rule_parts = []
+                description_parts = []
+                in_description = False
+                
+                for i, part in enumerate(parts[3:], 3):
+                    if part.startswith('[') and not in_description:
+                        in_description = True
+                        description_parts.append(part[1:])
+                    elif in_description:
+                        if part.endswith(']'):
+                            description_parts.append(part[:-1])
+                            break
+                        else:
+                            description_parts.append(part)
+                    else:
+                        rule_parts.append(part)
+                
+                rule = " ".join(rule_parts)
+                description = " ".join(description_parts) if description_parts else ""
+                
+                if rule_type == "global":
+                    rules_manager.add_global_rule(rule, description)
+                elif rule_type == "workspace":
+                    rules_manager.add_workspace_rule(rule, description, current_workspace)
+                else:
+                    console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+        
+        elif parts[1] == "remove":
+            if len(parts) < 4:
+                console.print("❌ Usage: /rules remove <global|workspace> <index>", style="red")
+            else:
+                rule_type = parts[2].lower()
+                try:
+                    index = int(parts[3])
+                    if rule_type == "global":
+                        rules_manager.remove_global_rule(index)
+                    elif rule_type == "workspace":
+                        rules_manager.remove_workspace_rule(index, current_workspace)
+                    else:
+                        console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+                except ValueError:
+                    console.print("❌ Index must be a number", style="red")
+        
+        elif parts[1] == "clear":
+            if len(parts) < 3:
+                console.print("❌ Usage: /rules clear <global|workspace>", style="red")
+            else:
+                rule_type = parts[2].lower()
+                if rule_type == "global":
+                    rules_manager.clear_global_rules()
+                elif rule_type == "workspace":
+                    rules_manager.clear_workspace_rules(current_workspace)
+                else:
+                    console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+        
+        else:
+            console.print("❌ Invalid rules command. Use /rules for help.", style="red")
+        
+        return True
+    
     elif cmd == "clear":
         console.clear()
         console.print("💬 Chat cleared")
@@ -810,6 +989,12 @@ def show_help():
     help_text.append("• /lmodel <model_path> - Load local Hugging Face model\n")
     help_text.append("• /lmodel unload - Unload current local model\n")
     help_text.append("• /session [list|new|load <id>|delete <id>|export <id>] - Manage chat sessions\n")
+    help_text.append("• /rules - Manage global and workspace rules for AI behavior\n")
+    help_text.append("  - /rules add global <rule> [description] - Add a global rule\n", style="dim")
+    help_text.append("  - /rules add workspace <rule> [description] - Add a workspace rule\n", style="dim")
+    help_text.append("  - /rules remove global <index> - Remove a global rule\n", style="dim")
+    help_text.append("  - /rules remove workspace <index> - Remove a workspace rule\n", style="dim")
+    help_text.append("  - /rules clear global|workspace - Clear all rules of a type\n", style="dim")
     help_text.append("• /speed [instant|fast|normal|slow|<number>] - Set typing speed for AI responses\n")
     help_text.append("• /clear - Clear chat screen\n")
     help_text.append("• /exit or /quit - Exit chat session\n")
