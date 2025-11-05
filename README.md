@@ -495,9 +495,4 @@ You: /model claude-3-sonnet-20240229
 ---
 
 ## License
-
-Proprietary - All Rights Reserved
-
-© 2025 Cognautic
-
-For licensing inquiries, contact: cognautic@gmail.com
+MIT
