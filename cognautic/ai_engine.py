@@ -15,15 +15,17 @@ from .provider_endpoints import GenericAPIClient, get_all_providers, get_provide
 
 class AIProvider(ABC):
     """Abstract base class for AI providers"""
-    
+
     def __init__(self, api_key: str):
         self.api_key = api_key
-    
+
     @abstractmethod
-    async def generate_response(self, messages: List[Dict], model: str = None, **kwargs) -> str:
+    async def generate_response(
+        self, messages: List[Dict], model: str = None, **kwargs
+    ) -> str:
         """Generate response from the AI provider"""
         pass
-    
+
     @abstractmethod
     def get_available_models(self) -> List[str]:
         """Get list of available models"""
@@ -32,16 +34,18 @@ class AIProvider(ABC):
 
 class GenericProvider(AIProvider):
     """Generic provider that can work with any API endpoint"""
-    
+
     def __init__(self, api_key: str, provider_name: str):
         super().__init__(api_key)
         self.provider_name = provider_name
         self.client = GenericAPIClient(provider_name, api_key)
-        
-    async def generate_response(self, messages: List[Dict], model: str = None, **kwargs) -> str:
+
+    async def generate_response(
+        self, messages: List[Dict], model: str = None, **kwargs
+    ) -> str:
         try:
             response = await self.client.chat_completion(messages, model, **kwargs)
-            
+
             # Extract text from different response formats
             if self.provider_name == "google":
                 if "candidates" in response and response["candidates"]:
@@ -49,21 +53,21 @@ class GenericProvider(AIProvider):
                     if "content" in candidate and "parts" in candidate["content"]:
                         return candidate["content"]["parts"][0]["text"]
                 return "No response generated"
-                
+
             elif self.provider_name == "anthropic":
                 if "content" in response and response["content"]:
                     return response["content"][0]["text"]
                 return "No response generated"
-                
+
             else:
                 # OpenAI-compatible format
                 if "choices" in response and response["choices"]:
                     return response["choices"][0]["message"]["content"]
                 return "No response generated"
-                
+
         except Exception as e:
             raise Exception(f"{self.provider_name.title()} API error: {str(e)}")
-    
+
     def get_available_models(self) -> List[str]:
         """Get list of available models - returns generic list since we support any model"""
         return [f"{self.provider_name}-model-1", f"{self.provider_name}-model-2"]
@@ -71,85 +75,102 @@ class GenericProvider(AIProvider):
 
 class OpenAIProvider(AIProvider):
     """OpenAI provider implementation"""
-    
+
     def __init__(self, api_key: str):
         super().__init__(api_key)
         try:
             import openai
+
             self.client = openai.AsyncOpenAI(api_key=api_key)
         except ImportError:
             raise ImportError("OpenAI library not installed. Run: pip install openai")
-    
-    async def generate_response(self, messages: List[Dict], model: str = "gpt-4", **kwargs) -> str:
+
+    async def generate_response(
+        self, messages: List[Dict], model: str = "gpt-4", **kwargs
+    ) -> str:
         try:
             response = await self.client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_tokens=kwargs.get('max_tokens', 4096),
-                temperature=kwargs.get('temperature', 0.7)
+                max_tokens=kwargs.get("max_tokens", 4096),
+                temperature=kwargs.get("temperature", 0.7),
             )
             return response.choices[0].message.content
         except Exception as e:
             raise Exception(f"OpenAI API error: {str(e)}")
-    
+
     def get_available_models(self) -> List[str]:
         return ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo", "gpt-4o", "gpt-4o-mini"]
 
 
 class AnthropicProvider(AIProvider):
     """Anthropic provider implementation"""
-    
+
     def __init__(self, api_key: str):
         super().__init__(api_key)
         try:
             import anthropic
+
             self.client = anthropic.AsyncAnthropic(api_key=api_key)
         except ImportError:
-            raise ImportError("Anthropic library not installed. Run: pip install anthropic")
-    
-    async def generate_response(self, messages: List[Dict], model: str = "claude-3-sonnet-20240229", **kwargs) -> str:
+            raise ImportError(
+                "Anthropic library not installed. Run: pip install anthropic"
+            )
+
+    async def generate_response(
+        self, messages: List[Dict], model: str = "claude-3-sonnet-20240229", **kwargs
+    ) -> str:
         try:
             # Convert messages format for Anthropic
             system_message = ""
             user_messages = []
-            
+
             for msg in messages:
                 if msg["role"] == "system":
                     system_message = msg["content"]
                 else:
                     user_messages.append(msg)
-            
+
             response = await self.client.messages.create(
                 model=model,
-                max_tokens=kwargs.get('max_tokens', 4096),
-                temperature=kwargs.get('temperature', 0.7),
+                max_tokens=kwargs.get("max_tokens", 4096),
+                temperature=kwargs.get("temperature", 0.7),
                 system=system_message,
-                messages=user_messages
+                messages=user_messages,
             )
             return response.content[0].text
         except Exception as e:
             raise Exception(f"Anthropic API error: {str(e)}")
-    
+
     def get_available_models(self) -> List[str]:
-        return ["claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"]
+        return [
+            "claude-3-opus-20240229",
+            "claude-3-sonnet-20240229",
+            "claude-3-haiku-20240307",
+        ]
 
 
 class GoogleProvider(AIProvider):
     """Google provider implementation"""
-    
+
     def __init__(self, api_key: str):
         super().__init__(api_key)
         try:
             import google.generativeai as genai
+
             genai.configure(api_key=api_key)
             self.genai = genai
         except ImportError:
-            raise ImportError("Google Generative AI library not installed. Run: pip install google-generativeai")
-    
-    async def generate_response(self, messages: List[Dict], model: str = "gemini-pro", **kwargs) -> str:
+            raise ImportError(
+                "Google Generative AI library not installed. Run: pip install google-generativeai"
+            )
+
+    async def generate_response(
+        self, messages: List[Dict], model: str = "gemini-pro", **kwargs
+    ) -> str:
         try:
             model_instance = self.genai.GenerativeModel(model)
-            
+
             # Convert messages to Google format
             prompt = ""
             for msg in messages:
@@ -159,23 +180,25 @@ class GoogleProvider(AIProvider):
                     prompt += f"User: {msg['content']}\n"
                 elif msg["role"] == "assistant":
                     prompt += f"Assistant: {msg['content']}\n"
-            
+
             response = await model_instance.generate_content_async(
                 prompt,
                 generation_config=self.genai.types.GenerationConfig(
-                    max_output_tokens=kwargs.get('max_tokens', 4096),
-                    temperature=kwargs.get('temperature', 0.7)
-                )
+                    max_output_tokens=kwargs.get("max_tokens", 4096),
+                    temperature=kwargs.get("temperature", 0.7),
+                ),
             )
             return response.text
         except Exception as e:
             raise Exception(f"Google API error: {str(e)}")
-    
-    async def generate_response_stream(self, messages: List[Dict], model: str = "gemini-pro", **kwargs):
+
+    async def generate_response_stream(
+        self, messages: List[Dict], model: str = "gemini-pro", **kwargs
+    ):
         """Generate streaming response"""
         try:
             model_instance = self.genai.GenerativeModel(model)
-            
+
             # Convert messages to Google format
             prompt = ""
             for msg in messages:
@@ -185,141 +208,155 @@ class GoogleProvider(AIProvider):
                     prompt += f"User: {msg['content']}\n"
                 elif msg["role"] == "assistant":
                     prompt += f"Assistant: {msg['content']}\n"
-            
+
             response = model_instance.generate_content(
                 prompt,
                 generation_config=self.genai.types.GenerationConfig(
-                    max_output_tokens=kwargs.get('max_tokens', 4096),
-                    temperature=kwargs.get('temperature', 0.7)
+                    max_output_tokens=kwargs.get("max_tokens", 4096),
+                    temperature=kwargs.get("temperature", 0.7),
                 ),
-                stream=True
+                stream=True,
             )
-            
+
             for chunk in response:
                 if chunk.text:
                     yield chunk.text
         except Exception as e:
             raise Exception(f"Google API error: {str(e)}")
-    
+
     def get_available_models(self) -> List[str]:
         return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro", "gemini-pro-vision"]
 
 
 class TogetherProvider(AIProvider):
     """Together AI provider implementation"""
-    
+
     def __init__(self, api_key: str):
         super().__init__(api_key)
         try:
             import together
+
             self.client = together.AsyncTogether(api_key=api_key)
         except ImportError:
-            raise ImportError("Together library not installed. Run: pip install together")
-    
-    async def generate_response(self, messages: List[Dict], model: str = "meta-llama/Llama-2-70b-chat-hf", **kwargs) -> str:
+            raise ImportError(
+                "Together library not installed. Run: pip install together"
+            )
+
+    async def generate_response(
+        self,
+        messages: List[Dict],
+        model: str = "meta-llama/Llama-2-70b-chat-hf",
+        **kwargs,
+    ) -> str:
         try:
             response = await self.client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_tokens=kwargs.get('max_tokens', 4096),
-                temperature=kwargs.get('temperature', 0.7)
+                max_tokens=kwargs.get("max_tokens", 4096),
+                temperature=kwargs.get("temperature", 0.7),
             )
             return response.choices[0].message.content
         except Exception as e:
             raise Exception(f"Together API error: {str(e)}")
-    
+
     def get_available_models(self) -> List[str]:
         return [
             "meta-llama/Llama-2-70b-chat-hf",
             "meta-llama/Llama-2-13b-chat-hf",
             "mistralai/Mixtral-8x7B-Instruct-v0.1",
-            "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO"
+            "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
         ]
 
 
 class OpenRouterProvider(AIProvider):
     """OpenRouter provider implementation"""
-    
+
     def __init__(self, api_key: str):
         super().__init__(api_key)
         try:
             import openai
+
             self.client = openai.AsyncOpenAI(
-                api_key=api_key,
-                base_url="https://openrouter.ai/api/v1"
+                api_key=api_key, base_url="https://openrouter.ai/api/v1"
             )
         except ImportError:
             raise ImportError("OpenAI library not installed. Run: pip install openai")
-    
-    async def generate_response(self, messages: List[Dict], model: str = "anthropic/claude-3-sonnet", **kwargs) -> str:
+
+    async def generate_response(
+        self, messages: List[Dict], model: str = "anthropic/claude-3-sonnet", **kwargs
+    ) -> str:
         try:
             response = await self.client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_tokens=kwargs.get('max_tokens', 4096),
-                temperature=kwargs.get('temperature', 0.7)
+                max_tokens=kwargs.get("max_tokens", 4096),
+                temperature=kwargs.get("temperature", 0.7),
             )
             return response.choices[0].message.content
         except Exception as e:
             raise Exception(f"OpenRouter API error: {str(e)}")
-    
+
     def get_available_models(self) -> List[str]:
         return [
             "anthropic/claude-3-opus",
             "anthropic/claude-3-sonnet",
             "openai/gpt-4-turbo",
-            "meta-llama/llama-3-70b-instruct"
+            "meta-llama/llama-3-70b-instruct",
         ]
 
 
 class LocalModelProvider(AIProvider):
     """Local model provider for both Hugging Face and GGUF models"""
-    
+
     def __init__(self, model_path: str):
         super().__init__(api_key="local")  # No API key needed for local models
         self.model_path = model_path
         self.model = None
         self.tokenizer = None
         self.device = None
-        self.is_gguf = model_path.endswith('.gguf')
+        self.is_gguf = model_path.endswith(".gguf")
         self.n_ctx = 2048  # Will be set during model loading
         self._load_model()
-    
+
     def _load_model(self):
         """Load the local model (Hugging Face or GGUF)"""
         if self.is_gguf:
             self._load_gguf_model()
         else:
             self._load_hf_model()
-    
+
     def _load_gguf_model(self):
         """Load a GGUF quantized model using llama-cpp-python"""
         try:
             from llama_cpp import Llama
             import os
-            
+
             print(f"Loading GGUF model from {self.model_path}...")
-            
+
             # Get optimal thread count (use all available cores)
             n_threads = os.cpu_count() or 4
-            
+
             # Try to load model metadata to get optimal context size
             try:
                 # Load with minimal context first to read metadata
                 temp_model = Llama(model_path=self.model_path, n_ctx=512, verbose=False)
                 # Get model's training context (if available)
                 model_metadata = temp_model.metadata
-                n_ctx_train = model_metadata.get('n_ctx_train', 2048) if hasattr(temp_model, 'metadata') else 2048
+                n_ctx_train = (
+                    model_metadata.get("n_ctx_train", 2048)
+                    if hasattr(temp_model, "metadata")
+                    else 2048
+                )
                 del temp_model
-                
+
                 # Use smaller of: training context or 4096 (for performance)
                 self.n_ctx = min(n_ctx_train, 4096) if n_ctx_train > 0 else 2048
             except:
                 # Fallback to 2048 if metadata reading fails
                 self.n_ctx = 2048
-            
+
             print(f"Using context window: {self.n_ctx} tokens")
-            
+
             # Load model with optimal context
             self.model = Llama(
                 model_path=self.model_path,
@@ -327,27 +364,29 @@ class LocalModelProvider(AIProvider):
                 n_threads=n_threads,  # Use all CPU threads
                 n_gpu_layers=0,  # 0 for CPU, increase for GPU
                 n_batch=512,  # Batch size for prompt processing
-                verbose=False
+                verbose=False,
             )
             self.device = "cpu"
-            print(f"✅ GGUF model loaded successfully on {self.device} ({n_threads} threads)")
-            
+            print(
+                f"✅ GGUF model loaded successfully on {self.device} ({n_threads} threads)"
+            )
+
         except ImportError:
             raise ImportError(
                 "llama-cpp-python not installed. For GGUF models, run:\n"
                 "  pip install llama-cpp-python\n"
                 "Or for GPU support:\n"
-                "  CMAKE_ARGS=\"-DLLAMA_CUBLAS=on\" pip install llama-cpp-python"
+                '  CMAKE_ARGS="-DLLAMA_CUBLAS=on" pip install llama-cpp-python'
             )
         except Exception as e:
             raise Exception(f"Failed to load GGUF model: {str(e)}")
-    
+
     def _load_hf_model(self):
         """Load a Hugging Face transformers model"""
         try:
             from transformers import AutoModelForCausalLM, AutoTokenizer
             import torch
-            
+
             # Determine device
             if torch.cuda.is_available():
                 self.device = "cuda"
@@ -355,70 +394,71 @@ class LocalModelProvider(AIProvider):
                 self.device = "mps"
             else:
                 self.device = "cpu"
-            
+
             print(f"Loading local model from {self.model_path} on {self.device}...")
-            
+
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
-            
+
             # Load model with appropriate settings
             if self.device == "cuda":
                 self.model = AutoModelForCausalLM.from_pretrained(
                     self.model_path,
                     device_map="auto",
                     torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True
+                    low_cpu_mem_usage=True,
                 )
             else:
                 self.model = AutoModelForCausalLM.from_pretrained(
-                    self.model_path,
-                    torch_dtype=torch.float32
+                    self.model_path, torch_dtype=torch.float32
                 )
                 self.model.to(self.device)
-            
+
             print(f"✅ Model loaded successfully on {self.device}")
-            
+
         except ImportError:
             raise ImportError(
                 "Transformers and PyTorch not installed. Run: pip install transformers torch accelerate"
             )
         except Exception as e:
             raise Exception(f"Failed to load local model: {str(e)}")
-    
-    async def generate_response(self, messages: List[Dict], model: str = None, **kwargs) -> str:
+
+    async def generate_response(
+        self, messages: List[Dict], model: str = None, **kwargs
+    ) -> str:
         """Generate response from the local model"""
         if self.is_gguf:
             return await self._generate_gguf_response(messages, **kwargs)
         else:
             return await self._generate_hf_response(messages, **kwargs)
-    
+
     async def _generate_gguf_response(self, messages: List[Dict], **kwargs) -> str:
         """Generate response using GGUF model"""
         try:
             # Truncate messages if needed to fit context window
-            max_tokens = kwargs.get('max_tokens', 256)  # Reduced for faster response
-            temperature = kwargs.get('temperature', 0.7)
-            
+            max_tokens = kwargs.get("max_tokens", 256)  # Reduced for faster response
+            temperature = kwargs.get("temperature", 0.7)
+
             # Use actual context window size with safety margin
             # Reserve space for: response (max_tokens) + safety buffer (200)
             available_context = self.n_ctx - max_tokens - 200
-            
+
             # Estimate tokens more conservatively (1 token ≈ 3 characters for safety)
             max_prompt_chars = available_context * 3
-            
+
             # Truncate messages to fit
             truncated_messages = self._truncate_messages(messages, max_prompt_chars)
-            
+
             # Convert messages to prompt
             prompt = self._messages_to_prompt(truncated_messages)
-            
+
             # Double-check prompt length (rough token estimate)
             estimated_prompt_tokens = len(prompt) // 3
             if estimated_prompt_tokens + max_tokens > self.n_ctx:
                 # Emergency truncation - keep only last message
                 truncated_messages = messages[-1:] if messages else []
                 prompt = self._messages_to_prompt(truncated_messages)
-            
+
             # Generate response with optimized settings
             response = self.model(
                 prompt,
@@ -428,32 +468,32 @@ class LocalModelProvider(AIProvider):
                 top_k=40,
                 repeat_penalty=1.1,
                 echo=False,  # Don't echo the prompt
-                stop=["User:", "System:", "\n\n"]  # Stop tokens
+                stop=["User:", "System:", "\n\n"],  # Stop tokens
             )
-            
+
             # Extract text from response
-            if isinstance(response, dict) and 'choices' in response:
-                return response['choices'][0]['text'].strip()
+            if isinstance(response, dict) and "choices" in response:
+                return response["choices"][0]["text"].strip()
             return str(response).strip()
-            
+
         except Exception as e:
             raise Exception(f"GGUF model generation error: {str(e)}")
-    
+
     async def _generate_hf_response(self, messages: List[Dict], **kwargs) -> str:
         """Generate response using Hugging Face model"""
         try:
             import torch
-            
+
             # Convert messages to a single prompt
             prompt = self._messages_to_prompt(messages)
-            
+
             # Tokenize input
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-            
+
             # Generate response
-            max_tokens = kwargs.get('max_tokens', 2048)
-            temperature = kwargs.get('temperature', 0.7)
-            
+            max_tokens = kwargs.get("max_tokens", 2048)
+            temperature = kwargs.get("temperature", 0.7)
+
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
@@ -461,37 +501,37 @@ class LocalModelProvider(AIProvider):
                     temperature=temperature,
                     do_sample=True,
                     top_p=0.9,
-                    pad_token_id=self.tokenizer.eos_token_id
+                    pad_token_id=self.tokenizer.eos_token_id,
                 )
-            
+
             # Decode response
             response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
+
             # Remove the prompt from the response
             if response.startswith(prompt):
-                response = response[len(prompt):].strip()
-            
+                response = response[len(prompt) :].strip()
+
             return response
-            
+
         except Exception as e:
             raise Exception(f"Local model generation error: {str(e)}")
-    
+
     def _truncate_messages(self, messages: List[Dict], max_chars: int) -> List[Dict]:
         """Truncate messages to fit within character limit"""
         # Always keep system message if present
         system_msgs = [m for m in messages if m["role"] == "system"]
         other_msgs = [m for m in messages if m["role"] != "system"]
-        
+
         # Estimate current size
         total_chars = sum(len(m["content"]) for m in messages)
-        
+
         if total_chars <= max_chars:
             return messages
-        
+
         # Keep system message and recent messages
         result = system_msgs.copy()
         current_chars = sum(len(m["content"]) for m in system_msgs)
-        
+
         # Add messages from most recent backwards
         for msg in reversed(other_msgs):
             msg_chars = len(msg["content"])
@@ -500,27 +540,27 @@ class LocalModelProvider(AIProvider):
                 current_chars += msg_chars
             else:
                 break
-        
+
         return result
-    
+
     def _messages_to_prompt(self, messages: List[Dict]) -> str:
         """Convert message format to a prompt string"""
         prompt = ""
         for msg in messages:
             role = msg["role"]
             content = msg["content"]
-            
+
             if role == "system":
                 prompt += f"System: {content}\n\n"
             elif role == "user":
                 prompt += f"User: {content}\n\n"
             elif role == "assistant":
                 prompt += f"Assistant: {content}\n\n"
-        
+
         # Add final assistant prompt
         prompt += "Assistant: "
         return prompt
-    
+
     def get_available_models(self) -> List[str]:
         """Get list of available models"""
         return [self.model_path]
@@ -528,7 +568,7 @@ class LocalModelProvider(AIProvider):
 
 class AIEngine:
     """Main AI engine that manages providers and handles requests"""
-    
+
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self.tool_registry = ToolRegistry()
@@ -536,268 +576,288 @@ class AIEngine:
         self.local_model_provider = None  # Track local model separately
         # Give AI engine unrestricted permissions
         from .tools.base import PermissionLevel
-        self.tool_registry.set_permission_level('ai_engine', PermissionLevel.UNRESTRICTED)
+
+        self.tool_registry.set_permission_level(
+            "ai_engine", PermissionLevel.UNRESTRICTED
+        )
         self._initialize_providers()
-    
+
     def _initialize_providers(self):
         """Initialize available AI providers"""
         # Get all supported providers from endpoints
         all_providers = get_all_providers()
-        
+
         # Legacy provider classes for backward compatibility
         legacy_provider_classes = {
-            'openai': OpenAIProvider,
-            'anthropic': AnthropicProvider,
-            'google': GoogleProvider,
-            'together': TogetherProvider,
-            'openrouter': OpenRouterProvider
+            "openai": OpenAIProvider,
+            "anthropic": AnthropicProvider,
+            "google": GoogleProvider,
+            "together": TogetherProvider,
+            "openrouter": OpenRouterProvider,
         }
-        
+
         for provider_name in all_providers:
             api_key = self.config_manager.get_api_key(provider_name)
             if api_key:
                 try:
                     # Use legacy provider if available, otherwise use generic provider
                     if provider_name in legacy_provider_classes:
-                        self.providers[provider_name] = legacy_provider_classes[provider_name](api_key)
+                        self.providers[provider_name] = legacy_provider_classes[
+                            provider_name
+                        ](api_key)
                     else:
-                        self.providers[provider_name] = GenericProvider(api_key, provider_name)
+                        self.providers[provider_name] = GenericProvider(
+                            api_key, provider_name
+                        )
                 except Exception as e:
                     print(f"Warning: Could not initialize {provider_name}: {e}")
-        
-        # Check if local model is configured
-        local_model_path = self.config_manager.get_config_value('local_model_path')
-        if local_model_path:
-            try:
-                self.local_model_provider = LocalModelProvider(local_model_path)
-                self.providers['local'] = self.local_model_provider
-            except Exception as e:
-                print(f"Warning: Could not initialize local model: {e}")
-    
+
+        # Don't auto-load local model at startup - only load when explicitly requested
+        # This prevents unnecessary loading and error messages when not using local provider
+
     def load_local_model(self, model_path: str):
         """Load a local Hugging Face model"""
         try:
             self.local_model_provider = LocalModelProvider(model_path)
-            self.providers['local'] = self.local_model_provider
-            self.config_manager.set_config('local_model_path', model_path)
+            self.providers["local"] = self.local_model_provider
+            self.config_manager.set_config("local_model_path", model_path)
             return True
         except Exception as e:
             raise Exception(f"Failed to load local model: {str(e)}")
-    
+
     def unload_local_model(self):
         """Unload the local model and free memory"""
-        if 'local' in self.providers:
-            del self.providers['local']
+        if "local" in self.providers:
+            del self.providers["local"]
         self.local_model_provider = None
-        self.config_manager.delete_config('local_model_path')
-    
+        self.config_manager.delete_config("local_model_path")
+
     def get_available_providers(self) -> List[str]:
         """Get list of available providers"""
         return list(self.providers.keys())
-    
+
     def get_provider_models(self, provider: str) -> List[str]:
         """Get available models for a provider"""
         if provider in self.providers:
             return self.providers[provider].get_available_models()
         return []
-    
+
     async def process_message(
-        self, 
-        message: str, 
-        provider: str = None, 
+        self,
+        message: str,
+        provider: str = None,
         model: str = None,
         project_path: str = None,
         context: List[Dict] = None,
-        conversation_history: List[Dict] = None
+        conversation_history: List[Dict] = None,
     ) -> str:
         """Process a user message and generate AI response"""
-        
+
         # Use default provider if not specified
         if not provider:
-            provider = self.config_manager.get_config_value('default_provider')
-        
+            provider = self.config_manager.get_config_value("default_provider")
+
         if provider not in self.providers:
-            raise Exception(f"Provider '{provider}' not available. Available: {list(self.providers.keys())}")
-        
+            raise Exception(
+                f"Provider '{provider}' not available. Available: {list(self.providers.keys())}"
+            )
+
         # Build message context
         messages = []
-        
+
         # Add system message
         system_prompt = self._build_system_prompt(project_path)
         messages.append({"role": "system", "content": system_prompt})
-        
+
         # Add conversation history if provided (for context)
         if conversation_history:
             messages.extend(conversation_history)
-        
+
         # Add context if provided (for additional context)
         if context:
             messages.extend(context)
-        
+
         # Add current user message
         messages.append({"role": "user", "content": message})
-        
+
         # Get AI response
         ai_provider = self.providers[provider]
-        
+
         # Use default model if not specified
         if not model:
             available_models = ai_provider.get_available_models()
-            if provider == 'google':
-                model = available_models[0] if available_models else "gemini-1.5-flash"  # Use newer model
+            if provider == "google":
+                model = (
+                    available_models[0] if available_models else "gemini-1.5-flash"
+                )  # Use newer model
             else:
                 model = available_models[0] if available_models else None
-        
+
         config = self.config_manager.get_config()
         # Use unlimited tokens (or max available for the model)
-        max_tokens = config.get('max_tokens', None)  # None = unlimited
+        max_tokens = config.get("max_tokens", None)  # None = unlimited
         if max_tokens == 0 or max_tokens == -1:
             max_tokens = None  # Treat 0 or -1 as unlimited
-        
+
         response = await ai_provider.generate_response(
             messages=messages,
             model=model,
             max_tokens=max_tokens or 16384,  # Use large default if None
-            temperature=config.get('temperature', 0.7)
+            temperature=config.get("temperature", 0.7),
         )
-        
+
         # Check if response contains tool calls
         has_tools = self._contains_tool_calls(response)
         if has_tools:
             response = await self._execute_tools(response, project_path)
-        
+
         return response
-    
+
     async def process_message_stream(
-        self, 
-        message: str, 
-        provider: str = None, 
+        self,
+        message: str,
+        provider: str = None,
         model: str = None,
         project_path: str = None,
         context: List[Dict] = None,
-        conversation_history: List[Dict] = None
+        conversation_history: List[Dict] = None,
     ):
         """Process a user message and generate streaming AI response"""
-        
+
         # Use default provider if not specified
         if not provider:
-            provider = self.config_manager.get_config_value('default_provider')
-        
+            provider = self.config_manager.get_config_value("default_provider")
+
         if provider not in self.providers:
-            raise Exception(f"Provider '{provider}' not available. Available: {list(self.providers.keys())}")
-        
+            raise Exception(
+                f"Provider '{provider}' not available. Available: {list(self.providers.keys())}"
+            )
+
         # No file tagging - use message as-is
         processed_message = message
-        
+
         # Build message context
         messages = []
-        
+
         # Add system message
         system_prompt = self._build_system_prompt(project_path)
         messages.append({"role": "system", "content": system_prompt})
-        
+
         # Add conversation history if provided (for context)
         if conversation_history:
             messages.extend(conversation_history)
-        
+
         # Add context if provided (for additional context)
         if context:
             messages.extend(context)
-        
+
         # Add current user message
         messages.append({"role": "user", "content": processed_message})
-        
+
         # Get AI response
         ai_provider = self.providers[provider]
-        
+
         # Use default model if not specified
         if not model:
             available_models = ai_provider.get_available_models()
-            if provider == 'google':
-                model = available_models[0] if available_models else "gemini-1.5-flash"  # Use newer model
+            if provider == "google":
+                model = (
+                    available_models[0] if available_models else "gemini-1.5-flash"
+                )  # Use newer model
             else:
                 model = available_models[0] if available_models else None
-        
+
         config = self.config_manager.get_config()
-        
+
         # Use unlimited tokens (or max available for the model)
-        max_tokens = config.get('max_tokens', None)  # None = unlimited
+        max_tokens = config.get("max_tokens", None)  # None = unlimited
         if max_tokens == 0 or max_tokens == -1:
             max_tokens = None  # Treat 0 or -1 as unlimited
-        
+
         # Generate response and process with tools
         response = await ai_provider.generate_response(
             messages=messages,
             model=model,
             max_tokens=max_tokens or 16384,  # Use large default if None
-            temperature=config.get('temperature', 0.7)
+            temperature=config.get("temperature", 0.7),
         )
-        
+
         # Process response with tools
-        async for chunk in self._process_response_with_tools(response, project_path, messages, ai_provider, model, config):
+        async for chunk in self._process_response_with_tools(
+            response, project_path, messages, ai_provider, model, config
+        ):
             yield chunk
-    
+
     def _parse_alternative_tool_calls(self, response: str):
         """Parse tool calls from alternative formats (e.g., GPT-OSS with special tokens)"""
         import re
         import json
-        
+
         tool_calls = []
-        
+
         # Pattern 1: GPT-OSS format with <|message|> tags containing JSON
         # Example: <|message|>{"command":"ls -la"}<|call|>
-        gpt_oss_pattern = r'<\|message\|>(.*?)<\|call\|>'
+        gpt_oss_pattern = r"<\|message\|>(.*?)<\|call\|>"
         gpt_oss_matches = re.findall(gpt_oss_pattern, response, re.DOTALL)
-        
+
         for match in gpt_oss_matches:
             try:
                 # Try to parse as JSON
                 data = json.loads(match.strip())
-                
+
                 # Determine tool type based on keys
-                if 'command' in data:
-                    tool_calls.append({
-                        'tool_code': 'command_runner',
-                        'args': {'command': data['command']}
-                    })
-                elif 'operation' in data:
-                    tool_calls.append({
-                        'tool_code': 'file_operations',
-                        'args': data
-                    })
+                if "command" in data:
+                    tool_calls.append(
+                        {
+                            "tool_code": "command_runner",
+                            "args": {"command": data["command"]},
+                        }
+                    )
+                elif "operation" in data:
+                    tool_calls.append({"tool_code": "file_operations", "args": data})
                 else:
                     # Generic tool call
-                    tool_calls.append({
-                        'tool_code': data.get('tool_code', 'unknown'),
-                        'args': data
-                    })
+                    tool_calls.append(
+                        {"tool_code": data.get("tool_code", "unknown"), "args": data}
+                    )
             except json.JSONDecodeError:
                 continue
-        
+
         # Pattern 2: Look for channel indicators with tool names
         # Example: <|channel|>commentary to=command_runner
-        channel_pattern = r'<\|channel\|>.*?to=(\w+)'
+        channel_pattern = r"<\|channel\|>.*?to=(\w+)"
         channels = re.findall(channel_pattern, response)
-        
+
         # Match channels with their corresponding messages
         if channels and gpt_oss_matches:
             for i, (channel, match) in enumerate(zip(channels, gpt_oss_matches)):
                 if i < len(tool_calls):
                     # Update tool_code based on channel
-                    if 'command_runner' in channel:
-                        tool_calls[i]['tool_code'] = 'command_runner'
-                    elif 'command_operations' in channel or 'file_operations' in channel:
-                        tool_calls[i]['tool_code'] = 'file_operations'
-                    elif 'response_control' in channel:
-                        tool_calls[i]['tool_code'] = 'response_control'
-        
+                    if "command_runner" in channel:
+                        tool_calls[i]["tool_code"] = "command_runner"
+                    elif (
+                        "command_operations" in channel or "file_operations" in channel
+                    ):
+                        tool_calls[i]["tool_code"] = "file_operations"
+                    elif "response_control" in channel:
+                        tool_calls[i]["tool_code"] = "response_control"
+
         return tool_calls
-    
-    async def _process_response_with_tools(self, response: str, project_path: str, messages: list, ai_provider, model: str, config: dict, recursion_depth: int = 0):
+
+    async def _process_response_with_tools(
+        self,
+        response: str,
+        project_path: str,
+        messages: list,
+        ai_provider,
+        model: str,
+        config: dict,
+        recursion_depth: int = 0,
+    ):
         """Process response and execute tools with AI continuation"""
         import re
         import json
-        
+
         # Limit recursion to prevent infinite loops
         MAX_RECURSION_DEPTH = 5  # Increased from 2 to allow more continuation
         if recursion_depth >= MAX_RECURSION_DEPTH:
@@ -805,26 +865,26 @@ class AIEngine:
             yield response
             yield "\n\n⚠️ **Maximum continuation depth reached. Please continue manually if needed.**\n"
             return
-        
+
         # Find JSON tool calls in the response (standard format)
-        json_pattern = r'```json\s*\n(.*?)\n```'
+        json_pattern = r"```json\s*\n(.*?)\n```"
         matches = re.findall(json_pattern, response, re.DOTALL)
-        
+
         # Also check for alternative formats (e.g., GPT-OSS)
         alt_tool_calls = self._parse_alternative_tool_calls(response)
-        
+
         if not matches and not alt_tool_calls:
             # No tools found, just yield the response
             yield response
             return
-        
+
         # Process all tool calls first, collect results
         tool_results = []
         should_end_response = False
-        
+
         # Combine standard JSON matches and alternative format tool calls
         all_tool_calls = []
-        
+
         # Parse standard JSON format
         for match in matches:
             try:
@@ -832,268 +892,334 @@ class AIEngine:
                 all_tool_calls.append(tool_call)
             except json.JSONDecodeError:
                 continue
-        
+
         # Add alternative format tool calls
         all_tool_calls.extend(alt_tool_calls)
-        
+
         for tool_call in all_tool_calls:
             try:
-                tool_name = tool_call.get('tool_code')
-                args = tool_call.get('args', {})
-                
+                tool_name = tool_call.get("tool_code")
+                args = tool_call.get("args", {})
+
                 # Check for response control tool
-                if tool_name == 'response_control':
-                    operation = args.get('operation', 'end_response')
-                    if operation == 'end_response':
+                if tool_name == "response_control":
+                    operation = args.get("operation", "end_response")
+                    if operation == "end_response":
                         should_end_response = True
-                        tool_results.append({
-                            'type': 'control',
-                            'display': f"\n✅ **Response Completed**\n"
-                        })
+                        tool_results.append(
+                            {
+                                "type": "control",
+                                "display": f"\n✅ **Response Completed**\n",
+                            }
+                        )
                     continue
-                
+
                 # Execute the tool
-                if tool_name == 'command_runner':
+                if tool_name == "command_runner":
                     cmd_args = args.copy()
-                    if 'operation' not in cmd_args:
-                        cmd_args['operation'] = 'run_command'
-                    if 'cwd' not in cmd_args:
-                        cmd_args['cwd'] = project_path or '.'
-                    
-                    result = await self.tool_registry.execute_tool('command_runner', user_id='ai_engine', **cmd_args)
+                    if "operation" not in cmd_args:
+                        cmd_args["operation"] = "run_command"
+                    if "cwd" not in cmd_args:
+                        cmd_args["cwd"] = project_path or "."
+
+                    result = await self.tool_registry.execute_tool(
+                        "command_runner", user_id="ai_engine", **cmd_args
+                    )
                     if result.success:
-                        command = args.get('command', 'unknown')
-                        output = result.data.get('stdout', '') if isinstance(result.data, dict) else str(result.data)
-                        tool_results.append({
-                            'type': 'command',
-                            'command': command,
-                            'output': output,
-                            'display': f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{output}\n```\n"
-                        })
+                        command = args.get("command", "unknown")
+                        output = (
+                            result.data.get("stdout", "")
+                            if isinstance(result.data, dict)
+                            else str(result.data)
+                        )
+                        tool_results.append(
+                            {
+                                "type": "command",
+                                "command": command,
+                                "output": output,
+                                "display": f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{output}\n```\n",
+                            }
+                        )
                     else:
-                        tool_results.append({
-                            'type': 'error',
-                            'display': f"\n❌ **Command Error:** {result.error}\n"
-                        })
-                
-                elif tool_name == 'file_operations':
+                        tool_results.append(
+                            {
+                                "type": "error",
+                                "display": f"\n❌ **Command Error:** {result.error}\n",
+                            }
+                        )
+
+                elif tool_name == "file_operations":
                     # Prepend project_path to relative file paths
-                    file_path = args.get('file_path')
+                    file_path = args.get("file_path")
                     if file_path and project_path:
                         from pathlib import Path
+
                         path = Path(file_path)
                         if not path.is_absolute():
-                            args['file_path'] = str(Path(project_path) / file_path)
-                    
-                    result = await self.tool_registry.execute_tool('file_operations', user_id='ai_engine', **args)
+                            args["file_path"] = str(Path(project_path) / file_path)
+
+                    result = await self.tool_registry.execute_tool(
+                        "file_operations", user_id="ai_engine", **args
+                    )
                     if result.success:
-                        operation = args.get('operation')
-                        file_path = args.get('file_path')
-                        
-                        if operation == 'read_file' or operation == 'read_file_lines':
-                            content = result.data.get('content', '') if isinstance(result.data, dict) else str(result.data)
+                        operation = args.get("operation")
+                        file_path = args.get("file_path")
+
+                        if operation == "read_file" or operation == "read_file_lines":
+                            content = (
+                                result.data.get("content", "")
+                                if isinstance(result.data, dict)
+                                else str(result.data)
+                            )
                             # Truncate very long content for display
                             display_content = content
                             if len(content) > 5000:
-                                display_content = content[:5000] + f"\n...[{len(content) - 5000} more characters truncated]"
-                            
+                                display_content = (
+                                    content[:5000]
+                                    + f"\n...[{len(content) - 5000} more characters truncated]"
+                                )
+
                             # Add line info for read_file_lines
                             line_info = ""
-                            if operation == 'read_file_lines' and isinstance(result.data, dict):
-                                start = result.data.get('start_line', 1)
-                                end = result.data.get('end_line', 1)
-                                total = result.data.get('total_lines', 0)
+                            if operation == "read_file_lines" and isinstance(
+                                result.data, dict
+                            ):
+                                start = result.data.get("start_line", 1)
+                                end = result.data.get("end_line", 1)
+                                total = result.data.get("total_lines", 0)
                                 line_info = f" (lines {start}-{end} of {total})"
-                            
-                            tool_results.append({
-                                'type': 'file_read',
-                                'file_path': file_path,
-                                'content': content,  # Full content for AI processing
-                                'display': f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n📄 **Result:**\n```\n{display_content}\n```\n"
-                            })
-                        elif operation == 'write_file_lines':
+
+                            tool_results.append(
+                                {
+                                    "type": "file_read",
+                                    "file_path": file_path,
+                                    "content": content,  # Full content for AI processing
+                                    "display": f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n📄 **Result:**\n```\n{display_content}\n```\n",
+                                }
+                            )
+                        elif operation == "write_file_lines":
                             # Show line range info for write_file_lines
                             line_info = ""
                             if isinstance(result.data, dict):
-                                start = result.data.get('start_line', 1)
-                                end = result.data.get('end_line', 1)
-                                lines_written = result.data.get('lines_written', 0)
+                                start = result.data.get("start_line", 1)
+                                end = result.data.get("end_line", 1)
+                                lines_written = result.data.get("lines_written", 0)
                                 line_info = f" (lines {start}-{end}, {lines_written} lines written)"
-                            tool_results.append({
-                                'type': 'file_op',
-                                'display': f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n"
-                            })
+                            tool_results.append(
+                                {
+                                    "type": "file_op",
+                                    "display": f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n",
+                                }
+                            )
                         else:
-                            tool_results.append({
-                                'type': 'file_op',
-                                'display': f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n"
-                            })
+                            tool_results.append(
+                                {
+                                    "type": "file_op",
+                                    "display": f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n",
+                                }
+                            )
                     else:
-                        tool_results.append({
-                            'type': 'error',
-                            'display': f"\n❌ **File Error:** {result.error}\n"
-                        })
-                
-                elif tool_name == 'web_search':
-                    operation = args.get('operation', 'search_web')
-                    result = await self.tool_registry.execute_tool('web_search', user_id='ai_engine', **args)
-                    
+                        tool_results.append(
+                            {
+                                "type": "error",
+                                "display": f"\n❌ **File Error:** {result.error}\n",
+                            }
+                        )
+
+                elif tool_name == "web_search":
+                    operation = args.get("operation", "search_web")
+                    result = await self.tool_registry.execute_tool(
+                        "web_search", user_id="ai_engine", **args
+                    )
+
                     if result.success:
                         # Format the result based on operation type
-                        if operation == 'search_web':
-                            query = args.get('query', 'unknown')
+                        if operation == "search_web":
+                            query = args.get("query", "unknown")
                             search_results = result.data if result.data else []
                             result_text = f"\n✅ **Tool Used:** web_search\n🔍 **Query:** {query}\n\n**Search Results:**\n"
                             for idx, item in enumerate(search_results[:5], 1):
-                                result_text += f"\n{idx}. **{item.get('title', 'No title')}**\n"
-                                result_text += f"   {item.get('snippet', 'No description')}\n"
+                                result_text += (
+                                    f"\n{idx}. **{item.get('title', 'No title')}**\n"
+                                )
+                                result_text += (
+                                    f"   {item.get('snippet', 'No description')}\n"
+                                )
                                 result_text += f"   🔗 {item.get('url', 'No URL')}\n"
-                            
-                            tool_results.append({
-                                'type': 'web_search',
-                                'query': query,
-                                'results': search_results,
-                                'display': result_text
-                            })
-                        
-                        elif operation == 'fetch_url_content':
-                            url = args.get('url', 'unknown')
+
+                            tool_results.append(
+                                {
+                                    "type": "web_search",
+                                    "query": query,
+                                    "results": search_results,
+                                    "display": result_text,
+                                }
+                            )
+
+                        elif operation == "fetch_url_content":
+                            url = args.get("url", "unknown")
                             content_data = result.data if result.data else {}
-                            title = content_data.get('title', 'No title')
-                            content = content_data.get('content', 'No content')
-                            content_type = content_data.get('content_type', 'text')
-                            
+                            title = content_data.get("title", "No title")
+                            content = content_data.get("content", "No content")
+                            content_type = content_data.get("content_type", "text")
+
                             # Truncate content if too long for display
                             display_content = content
                             max_display = 2000
                             if len(content) > max_display:
-                                display_content = content[:max_display] + f"\n\n... (truncated, total length: {len(content)} characters)"
-                            
-                            result_text = f"\n✅ **Tool Used:** web_search (fetch_url_content)\n"
+                                display_content = (
+                                    content[:max_display]
+                                    + f"\n\n... (truncated, total length: {len(content)} characters)"
+                                )
+
+                            result_text = (
+                                f"\n✅ **Tool Used:** web_search (fetch_url_content)\n"
+                            )
                             result_text += f"🌐 **URL:** {url}\n"
                             result_text += f"📄 **Title:** {title}\n"
                             result_text += f"📝 **Content Type:** {content_type}\n\n"
-                            result_text += f"**Content:**\n```\n{display_content}\n```\n"
-                            
-                            tool_results.append({
-                                'type': 'web_fetch',
-                                'url': url,
-                                'content': content,  # Full content for AI processing
-                                'display': result_text
-                            })
-                        
-                        elif operation == 'parse_documentation':
-                            url = args.get('url', 'unknown')
+                            result_text += (
+                                f"**Content:**\n```\n{display_content}\n```\n"
+                            )
+
+                            tool_results.append(
+                                {
+                                    "type": "web_fetch",
+                                    "url": url,
+                                    "content": content,  # Full content for AI processing
+                                    "display": result_text,
+                                }
+                            )
+
+                        elif operation == "parse_documentation":
+                            url = args.get("url", "unknown")
                             doc_data = result.data if result.data else {}
                             result_text = f"\n✅ **Tool Used:** web_search (parse_documentation)\n"
                             result_text += f"🌐 **URL:** {url}\n"
-                            result_text += f"📄 **Title:** {doc_data.get('title', 'No title')}\n"
+                            result_text += (
+                                f"📄 **Title:** {doc_data.get('title', 'No title')}\n"
+                            )
                             result_text += f"📚 **Type:** {doc_data.get('doc_type', 'unknown')}\n\n"
-                            
-                            sections = doc_data.get('sections', [])
+
+                            sections = doc_data.get("sections", [])
                             if sections:
                                 result_text += "**Sections:**\n"
                                 for section in sections[:5]:
-                                    result_text += f"\n• {section.get('title', 'Untitled')}\n"
-                            
-                            tool_results.append({
-                                'type': 'web_docs',
-                                'url': url,
-                                'doc_data': doc_data,
-                                'display': result_text
-                            })
-                        
-                        elif operation == 'get_api_docs':
-                            api_name = args.get('api_name', 'unknown')
+                                    result_text += (
+                                        f"\n• {section.get('title', 'Untitled')}\n"
+                                    )
+
+                            tool_results.append(
+                                {
+                                    "type": "web_docs",
+                                    "url": url,
+                                    "doc_data": doc_data,
+                                    "display": result_text,
+                                }
+                            )
+
+                        elif operation == "get_api_docs":
+                            api_name = args.get("api_name", "unknown")
                             api_data = result.data if result.data else {}
-                            if api_data.get('found', True):
-                                result_text = f"\n✅ **Tool Used:** web_search (get_api_docs)\n"
+                            if api_data.get("found", True):
+                                result_text = (
+                                    f"\n✅ **Tool Used:** web_search (get_api_docs)\n"
+                                )
                                 result_text += f"📚 **API:** {api_name}\n"
                                 result_text += f"📄 **Title:** {api_data.get('title', 'API Documentation')}\n"
                             else:
-                                result_text = f"\n⚠️ **Tool Used:** web_search (get_api_docs)\n"
+                                result_text = (
+                                    f"\n⚠️ **Tool Used:** web_search (get_api_docs)\n"
+                                )
                                 result_text += f"📚 **API:** {api_name}\n"
                                 result_text += f"❌ {api_data.get('message', 'Documentation not found')}\n"
-                            
-                            tool_results.append({
-                                'type': 'web_api_docs',
-                                'api_name': api_name,
-                                'api_data': api_data,
-                                'display': result_text
-                            })
+
+                            tool_results.append(
+                                {
+                                    "type": "web_api_docs",
+                                    "api_name": api_name,
+                                    "api_data": api_data,
+                                    "display": result_text,
+                                }
+                            )
                         else:
-                            tool_results.append({
-                                'type': 'web_search',
-                                'display': f"\n✅ **Tool Used:** web_search ({operation})\n"
-                            })
+                            tool_results.append(
+                                {
+                                    "type": "web_search",
+                                    "display": f"\n✅ **Tool Used:** web_search ({operation})\n",
+                                }
+                            )
                     else:
-                        tool_results.append({
-                            'type': 'error',
-                            'display': f"\n❌ **Web Search Error:** {result.error}\n"
-                        })
-            
+                        tool_results.append(
+                            {
+                                "type": "error",
+                                "display": f"\n❌ **Web Search Error:** {result.error}\n",
+                            }
+                        )
+
             except json.JSONDecodeError as e:
-                tool_results.append({
-                    'type': 'error',
-                    'display': f"\n❌ **JSON Parse Error:** {str(e)}\n"
-                })
+                tool_results.append(
+                    {
+                        "type": "error",
+                        "display": f"\n❌ **JSON Parse Error:** {str(e)}\n",
+                    }
+                )
             except Exception as e:
-                tool_results.append({
-                    'type': 'error',
-                    'display': f"\n❌ **Tool Error:** {str(e)}\n"
-                })
-        
+                tool_results.append(
+                    {"type": "error", "display": f"\n❌ **Tool Error:** {str(e)}\n"}
+                )
+
         # Now yield the response with tool results integrated
         if tool_results:
             # Show the initial part of the response (before first tool call)
-            first_tool_pos = response.find('```json')
+            first_tool_pos = response.find("```json")
             if first_tool_pos > 0:
                 yield response[:first_tool_pos]
-            
+
             # Show all tool results
             for tool_result in tool_results:
-                yield tool_result['display']
-            
+                yield tool_result["display"]
+
             # Check if we should end the response (end_response tool was called)
             if should_end_response:
                 return
-            
+
             # Always generate a continuation response after tool execution
             # This ensures the AI completes its thought after executing tools
             needs_continuation = True
-            
+
             if needs_continuation and recursion_depth < MAX_RECURSION_DEPTH:
                 # Generate a final response that incorporates all tool results
                 tool_context = ""
                 has_file_read = False
                 has_file_write = False
                 has_web_search = False
-                
+
                 for tool_result in tool_results:
-                    if tool_result['type'] == 'command':
+                    if tool_result["type"] == "command":
                         tool_context += f"Command '{tool_result['command']}' output: {tool_result['output']}\n"
-                    elif tool_result['type'] == 'file_read':
+                    elif tool_result["type"] == "file_read":
                         has_file_read = True
                         tool_context += f"File '{tool_result['file_path']}' contains: {tool_result['content']}\n"
-                    elif tool_result['type'] == 'file_op':
+                    elif tool_result["type"] == "file_op":
                         has_file_write = True
                         tool_context += f"File operation completed successfully\n"
-                    elif tool_result['type'] == 'web_search':
+                    elif tool_result["type"] == "web_search":
                         has_web_search = True
-                        results = tool_result.get('results', [])
+                        results = tool_result.get("results", [])
                         tool_context += f"Web search for '{tool_result.get('query', 'unknown')}' returned {len(results)} results\n"
-                    elif tool_result['type'] == 'web_fetch':
+                    elif tool_result["type"] == "web_fetch":
                         has_web_search = True
                         tool_context += f"Fetched content from '{tool_result.get('url', 'unknown')}': {tool_result.get('content', '')}\n"
-                    elif tool_result['type'] == 'web_docs':
+                    elif tool_result["type"] == "web_docs":
                         has_web_search = True
-                        doc_data = tool_result.get('doc_data', {})
+                        doc_data = tool_result.get("doc_data", {})
                         tool_context += f"Documentation from '{tool_result.get('url', 'unknown')}': {doc_data.get('content', '')}\n"
-                    elif tool_result['type'] == 'web_api_docs':
+                    elif tool_result["type"] == "web_api_docs":
                         has_web_search = True
-                        api_data = tool_result.get('api_data', {})
+                        api_data = tool_result.get("api_data", {})
                         tool_context += f"API documentation for '{tool_result.get('api_name', 'unknown')}': {api_data.get('content', '')}\n"
-                
+
                 # Build continuation prompt based on what tools were executed
                 if has_web_search:
                     # For web search results, provide context and ask AI to continue
@@ -1154,106 +1280,163 @@ Tool Results:
 Complete any remaining work, then call end_response when done.
 
 Continue your response:"""
-                
+
                 final_messages = messages + [
                     {"role": "assistant", "content": "I'll continue with the results."},
-                    {"role": "user", "content": final_prompt}
+                    {"role": "user", "content": final_prompt},
                 ]
-                
+
                 # Use appropriate tokens for continuation
                 # Use unlimited tokens to ensure completion
-                max_tokens = config.get('max_tokens', None)
+                max_tokens = config.get("max_tokens", None)
                 if max_tokens == 0 or max_tokens == -1:
                     max_tokens = None
                 continuation_max_tokens = max_tokens or 16384
-                
+
                 final_response = await ai_provider.generate_response(
                     messages=final_messages,
                     model=model,
                     max_tokens=continuation_max_tokens,
-                    temperature=config.get('temperature', 0.7)
+                    temperature=config.get("temperature", 0.7),
                 )
-                
+
                 # For file write continuations, strip out any tool calls to prevent loops
                 if has_file_write and self._contains_tool_calls(final_response):
                     # Remove tool calls from the response
                     import re
-                    json_pattern = r'```json\s*\n.*?\n```'
-                    cleaned_response = re.sub(json_pattern, '', final_response, flags=re.DOTALL)
+
+                    json_pattern = r"```json\s*\n.*?\n```"
+                    cleaned_response = re.sub(
+                        json_pattern, "", final_response, flags=re.DOTALL
+                    )
                     yield f"\n{cleaned_response.strip()}"
                 elif self._contains_tool_calls(final_response):
                     # For other cases, allow recursive processing but with depth limit
-                    async for chunk in self._process_response_with_tools(final_response, project_path, final_messages, ai_provider, model, config, recursion_depth + 1):
+                    async for chunk in self._process_response_with_tools(
+                        final_response,
+                        project_path,
+                        final_messages,
+                        ai_provider,
+                        model,
+                        config,
+                        recursion_depth + 1,
+                    ):
                         yield chunk
                 else:
                     yield f"\n{final_response}"
         else:
             # No tools, just yield the original response
             yield response
-    
-    async def _process_tool_calls_stream(self, response_text: str, project_path: str = None):
+
+    async def _process_tool_calls_stream(
+        self, response_text: str, project_path: str = None
+    ):
         """Process tool calls from response text and yield results"""
         import re
-        
+
         # Find all JSON blocks in the response
-        json_pattern = r'```json\s*\n(.*?)\n```'
+        json_pattern = r"```json\s*\n(.*?)\n```"
         matches = re.findall(json_pattern, response_text, re.DOTALL)
-        
+
         for match in matches:
             try:
                 tool_call = json.loads(match.strip())
-                tool_name = tool_call.get('tool_code')
-                args = tool_call.get('args', {})
-                
-                if tool_name == 'command_runner':
+                tool_name = tool_call.get("tool_code")
+                args = tool_call.get("args", {})
+
+                if tool_name == "command_runner":
                     # Handle command runner
                     cmd_args = args.copy()
-                    if 'operation' not in cmd_args:
-                        cmd_args['operation'] = 'run_command'
-                    if 'cwd' not in cmd_args:
-                        cmd_args['cwd'] = project_path or '.'
-                    
-                    result = await self.tool_registry.execute_tool('command_runner', user_id='ai_engine', **cmd_args)
+                    if "operation" not in cmd_args:
+                        cmd_args["operation"] = "run_command"
+                    if "cwd" not in cmd_args:
+                        cmd_args["cwd"] = project_path or "."
+
+                    result = await self.tool_registry.execute_tool(
+                        "command_runner", user_id="ai_engine", **cmd_args
+                    )
                     if result.success:
-                        command = args.get('command', 'unknown')
-                        output = result.data.get('stdout', '') if isinstance(result.data, dict) else str(result.data)
+                        command = args.get("command", "unknown")
+                        output = (
+                            result.data.get("stdout", "")
+                            if isinstance(result.data, dict)
+                            else str(result.data)
+                        )
                         yield f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{output}\n```\n"
                     else:
                         yield f"\n❌ **Command Error:** {result.error}\n"
-                
-                elif tool_name == 'file_operations':
+
+                elif tool_name == "file_operations":
                     # Handle file operations
-                    operation = args.get('operation')
-                    file_path = args.get('file_path')
-                    
+                    operation = args.get("operation")
+                    file_path = args.get("file_path")
+
                     # Prepend project_path to relative file paths
                     if file_path and project_path:
                         from pathlib import Path
+
                         path = Path(file_path)
                         if not path.is_absolute():
-                            args['file_path'] = str(Path(project_path) / file_path)
-                            file_path = args['file_path']
-                    
-                    result = await self.tool_registry.execute_tool('file_operations', user_id='ai_engine', **args)
+                            args["file_path"] = str(Path(project_path) / file_path)
+                            file_path = args["file_path"]
+
+                    result = await self.tool_registry.execute_tool(
+                        "file_operations", user_id="ai_engine", **args
+                    )
                     if result.success:
-                        if operation == 'read_file':
-                            content = result.data.get('content', '') if isinstance(result.data, dict) else str(result.data)
+                        if operation == "read_file":
+                            content = (
+                                result.data.get("content", "")
+                                if isinstance(result.data, dict)
+                                else str(result.data)
+                            )
                             yield f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n📄 **Result:**\n```\n{content}\n```\n"
                         else:
                             yield f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n"
                     else:
                         yield f"\n❌ **File Error:** {result.error}\n"
-                
+
             except json.JSONDecodeError as e:
                 yield f"\n❌ **JSON Parse Error:** {str(e)}\n"
             except Exception as e:
                 yield f"\n❌ **Tool Error:** {str(e)}\n"
-    
+
     def _build_system_prompt(self, project_path: str = None) -> str:
         """Build system prompt for the AI"""
-        prompt = """You are Cognautic, an advanced AI coding assistant running inside the Cognautic CLI.
+        
+        # Load user-defined rules FIRST (highest priority)
+        from .rules import RulesManager
+        rules_manager = RulesManager()
+        rules_text = rules_manager.get_rules_for_ai(project_path)
+        
+        prompt = ""
+        
+        # Add rules at the very beginning if they exist
+        if rules_text:
+            prompt += "="*80 + "\n"
+            prompt += "USER-DEFINED RULES (HIGHEST PRIORITY - MUST FOLLOW ABOVE ALL ELSE):\n"
+            prompt += "="*80 + "\n"
+            prompt += rules_text + "\n"
+            prompt += "="*80 + "\n"
+            prompt += "These rules OVERRIDE all other instructions. Follow them strictly.\n"
+            prompt += "="*80 + "\n\n"
+        
+        prompt += """You are Cognautic, an advanced AI coding assistant running inside the Cognautic CLI.
 
 IMPORTANT: You are operating within the Cognautic CLI environment. You can ONLY use the tools provided below. Do NOT suggest using external tools, IDEs, or commands that are not available in this CLI.
+
+Most Important Instruction:
+Before starting any project, always perform a web search about the project or topic you’re working on.
+
+:Documentation Requirement:
+
+Collect the key findings and relevant information.
+
+Create one or more Markdown (.md) files summarizing your research.
+
+Store these files inside an MD folder in the current project directory.
+
+These information files will serve as background documentation to guide project development.
 
 Your capabilities within Cognautic CLI:
 1. Code analysis and review
@@ -1452,7 +1635,7 @@ For commands (always explore first):
 
 ```json
 {
-  "tool_code": "command_runner", 
+  "tool_code": "command_runner",
   "args": {
     "command": "ls -la"
   }
@@ -1461,7 +1644,7 @@ For commands (always explore first):
 
 ```json
 {
-  "tool_code": "command_runner", 
+  "tool_code": "command_runner",
   "args": {
     "command": "pwd"
   }
@@ -1579,16 +1762,17 @@ RESPONSE CONTINUATION (CRITICAL - ALWAYS USE end_response):
   * You need to execute more tools
 - IMPORTANT: Forgetting to use end_response causes the user to manually type "continue" - ALWAYS use it!
 
-REMEMBER: 
+REMEMBER:
 1. Use tools to actually perform actions, don't just provide code examples!
 2. Complete ENTIRE requests in ONE response - create all necessary files and functionality!
 3. Don't stop after one file - build complete, functional projects!
 4. NEVER promise to do something without including the tool calls to actually do it!
 5. For very long file content, the system will automatically handle it - just provide the full content
 """
-        
+
         # Add OS information to help AI use correct commands
         import platform
+
         os_name = platform.system()
         if os_name == "Windows":
             prompt += "\n\nOPERATING SYSTEM: Windows"
@@ -1599,204 +1783,254 @@ REMEMBER:
         else:  # Linux and others
             prompt += "\n\nOPERATING SYSTEM: Linux"
             prompt += "\nUse Unix commands: 'ls', 'ls -la', 'find', etc."
-        
+
         if project_path:
             prompt += f"\n\nCurrent project path: {project_path}"
             prompt += "\nYou can analyze and modify files in this project."
-        
+
         return prompt
-    
+
     def _contains_tool_calls(self, response: str) -> bool:
         """Check if response contains tool calls"""
         # Check for JSON tool call patterns
         import re
+
         tool_patterns = [
             r'"tool_code":\s*"[^"]+?"',
             r'"tool_name":\s*"[^"]+?"',
-            r'execute_command',
-            r'command_runner',
-            r'file_operations',
-            r'web_search',
-            r'code_analysis'
+            r"execute_command",
+            r"command_runner",
+            r"file_operations",
+            r"web_search",
+            r"code_analysis",
         ]
         return any(re.search(pattern, response) for pattern in tool_patterns)
-    
+
     async def _execute_tools(self, response: str, project_path: str = None) -> str:
         """Execute tools mentioned in the response"""
         import re
         import json
-        
+
         # Find JSON tool calls in the response
-        json_pattern = r'```json\s*(\{[^`]+\})\s*```'
+        json_pattern = r"```json\s*(\{[^`]+\})\s*```"
         matches = re.findall(json_pattern, response, re.DOTALL)
-        
+
         if not matches:
             return response
-        
+
         # Process each tool call
         results = []
         for match in matches:
             try:
                 tool_call = json.loads(match)
-                tool_name = tool_call.get('tool_code') or tool_call.get('tool_name')
-                args = tool_call.get('args', {})
-                
-                if tool_name in ['execute_command', 'command_runner']:
-                    command = args.get('command')
+                tool_name = tool_call.get("tool_code") or tool_call.get("tool_name")
+                args = tool_call.get("args", {})
+
+                if tool_name in ["execute_command", "command_runner"]:
+                    command = args.get("command")
                     if command:
                         # Use command runner tool via registry
                         cmd_args = args.copy()
                         # Set default operation if not specified
-                        if 'operation' not in cmd_args:
-                            cmd_args['operation'] = 'run_command'
-                        if 'cwd' not in cmd_args:
-                            cmd_args['cwd'] = project_path or '.'
-                        result = await self.tool_registry.execute_tool('command_runner', user_id='ai_engine', **cmd_args)
+                        if "operation" not in cmd_args:
+                            cmd_args["operation"] = "run_command"
+                        if "cwd" not in cmd_args:
+                            cmd_args["cwd"] = project_path or "."
+                        result = await self.tool_registry.execute_tool(
+                            "command_runner", user_id="ai_engine", **cmd_args
+                        )
                         if result.success:
-                            command = args.get('command', 'unknown')
-                            results.append(f"✅ **Tool Used:** command_runner\n⚡ **Command Executed:** {command}")
+                            command = args.get("command", "unknown")
+                            results.append(
+                                f"✅ **Tool Used:** command_runner\n⚡ **Command Executed:** {command}"
+                            )
                         else:
-                            results.append(f"❌ **Tool Error:** command_runner - {result.error}")
-                
-                elif tool_name == 'file_operations':
-                    operation = args.get('operation')
+                            results.append(
+                                f"❌ **Tool Error:** command_runner - {result.error}"
+                            )
+
+                elif tool_name == "file_operations":
+                    operation = args.get("operation")
                     if operation:
                         # Prepend project_path to relative file paths
-                        file_path = args.get('file_path')
+                        file_path = args.get("file_path")
                         if file_path and project_path:
                             from pathlib import Path
+
                             path = Path(file_path)
                             if not path.is_absolute():
-                                args['file_path'] = str(Path(project_path) / file_path)
-                        
+                                args["file_path"] = str(Path(project_path) / file_path)
+
                         # Use file operations tool - pass all args directly
-                        result = await self.tool_registry.execute_tool('file_operations', user_id='ai_engine', **args)
+                        result = await self.tool_registry.execute_tool(
+                            "file_operations", user_id="ai_engine", **args
+                        )
                         if result.success:
                             # Format file operation results concisely
-                            if operation == 'create_file':
-                                file_path = args.get('file_path', 'unknown')
-                                results.append(f"✅ **Tool Used:** file_operations\n📄 **File Created:** {file_path}")
-                            elif operation == 'write_file':
-                                file_path = args.get('file_path', 'unknown')
-                                results.append(f"✅ **Tool Used:** file_operations\n📝 **File Edited:** {file_path}")
-                            elif operation == 'list_directory':
-                                dir_path = args.get('dir_path', 'unknown')
-                                file_count = len(result.data) if isinstance(result.data, list) else 0
-                                results.append(f"✅ **Tool Used:** file_operations\n📁 **Directory Listed:** {dir_path} ({file_count} items)")
+                            if operation == "create_file":
+                                file_path = args.get("file_path", "unknown")
+                                results.append(
+                                    f"✅ **Tool Used:** file_operations\n📄 **File Created:** {file_path}"
+                                )
+                            elif operation == "write_file":
+                                file_path = args.get("file_path", "unknown")
+                                results.append(
+                                    f"✅ **Tool Used:** file_operations\n📝 **File Edited:** {file_path}"
+                                )
+                            elif operation == "list_directory":
+                                dir_path = args.get("dir_path", "unknown")
+                                file_count = (
+                                    len(result.data)
+                                    if isinstance(result.data, list)
+                                    else 0
+                                )
+                                results.append(
+                                    f"✅ **Tool Used:** file_operations\n📁 **Directory Listed:** {dir_path} ({file_count} items)"
+                                )
                             else:
-                                results.append(f"✅ **Tool Used:** file_operations ({operation})")
+                                results.append(
+                                    f"✅ **Tool Used:** file_operations ({operation})"
+                                )
                         else:
-                            results.append(f"❌ **Tool Error:** file_operations - {result.error}")
-                
-                elif tool_name == 'web_search':
-                    operation = args.get('operation', 'search_web')
+                            results.append(
+                                f"❌ **Tool Error:** file_operations - {result.error}"
+                            )
+
+                elif tool_name == "web_search":
+                    operation = args.get("operation", "search_web")
                     # Use web search tool via registry
-                    result = await self.tool_registry.execute_tool('web_search', user_id='ai_engine', **args)
+                    result = await self.tool_registry.execute_tool(
+                        "web_search", user_id="ai_engine", **args
+                    )
                     if result.success:
                         # Format the result based on operation type
-                        if operation == 'search_web':
-                            query = args.get('query', 'unknown')
+                        if operation == "search_web":
+                            query = args.get("query", "unknown")
                             search_results = result.data if result.data else []
                             result_text = f"✅ **Tool Used:** web_search\n🔍 **Query:** {query}\n\n**Search Results:**\n"
                             for idx, item in enumerate(search_results[:5], 1):
-                                result_text += f"\n{idx}. **{item.get('title', 'No title')}**\n"
-                                result_text += f"   {item.get('snippet', 'No description')}\n"
+                                result_text += (
+                                    f"\n{idx}. **{item.get('title', 'No title')}**\n"
+                                )
+                                result_text += (
+                                    f"   {item.get('snippet', 'No description')}\n"
+                                )
                                 result_text += f"   🔗 {item.get('url', 'No URL')}\n"
                             results.append(result_text)
-                        
-                        elif operation == 'fetch_url_content':
-                            url = args.get('url', 'unknown')
+
+                        elif operation == "fetch_url_content":
+                            url = args.get("url", "unknown")
                             content_data = result.data if result.data else {}
-                            title = content_data.get('title', 'No title')
-                            content = content_data.get('content', 'No content')
-                            content_type = content_data.get('content_type', 'text')
-                            
+                            title = content_data.get("title", "No title")
+                            content = content_data.get("content", "No content")
+                            content_type = content_data.get("content_type", "text")
+
                             # Truncate content if too long
                             max_display = 2000
                             if len(content) > max_display:
-                                content = content[:max_display] + f"\n\n... (truncated, total length: {len(content)} characters)"
-                            
-                            result_text = f"✅ **Tool Used:** web_search (fetch_url_content)\n"
+                                content = (
+                                    content[:max_display]
+                                    + f"\n\n... (truncated, total length: {len(content)} characters)"
+                                )
+
+                            result_text = (
+                                f"✅ **Tool Used:** web_search (fetch_url_content)\n"
+                            )
                             result_text += f"🌐 **URL:** {url}\n"
                             result_text += f"📄 **Title:** {title}\n"
                             result_text += f"📝 **Content Type:** {content_type}\n\n"
                             result_text += f"**Content:**\n{content}"
                             results.append(result_text)
-                        
-                        elif operation == 'parse_documentation':
-                            url = args.get('url', 'unknown')
+
+                        elif operation == "parse_documentation":
+                            url = args.get("url", "unknown")
                             doc_data = result.data if result.data else {}
-                            result_text = f"✅ **Tool Used:** web_search (parse_documentation)\n"
+                            result_text = (
+                                f"✅ **Tool Used:** web_search (parse_documentation)\n"
+                            )
                             result_text += f"🌐 **URL:** {url}\n"
-                            result_text += f"📄 **Title:** {doc_data.get('title', 'No title')}\n"
+                            result_text += (
+                                f"📄 **Title:** {doc_data.get('title', 'No title')}\n"
+                            )
                             result_text += f"📚 **Type:** {doc_data.get('doc_type', 'unknown')}\n\n"
-                            
-                            sections = doc_data.get('sections', [])
+
+                            sections = doc_data.get("sections", [])
                             if sections:
                                 result_text += "**Sections:**\n"
                                 for section in sections[:5]:
-                                    result_text += f"\n• {section.get('title', 'Untitled')}\n"
+                                    result_text += (
+                                        f"\n• {section.get('title', 'Untitled')}\n"
+                                    )
                             results.append(result_text)
-                        
-                        elif operation == 'get_api_docs':
-                            api_name = args.get('api_name', 'unknown')
+
+                        elif operation == "get_api_docs":
+                            api_name = args.get("api_name", "unknown")
                             api_data = result.data if result.data else {}
-                            if api_data.get('found', True):
-                                result_text = f"✅ **Tool Used:** web_search (get_api_docs)\n"
+                            if api_data.get("found", True):
+                                result_text = (
+                                    f"✅ **Tool Used:** web_search (get_api_docs)\n"
+                                )
                                 result_text += f"📚 **API:** {api_name}\n"
                                 result_text += f"📄 **Title:** {api_data.get('title', 'API Documentation')}\n"
                                 results.append(result_text)
                             else:
-                                result_text = f"⚠️ **Tool Used:** web_search (get_api_docs)\n"
+                                result_text = (
+                                    f"⚠️ **Tool Used:** web_search (get_api_docs)\n"
+                                )
                                 result_text += f"📚 **API:** {api_name}\n"
                                 result_text += f"❌ {api_data.get('message', 'Documentation not found')}\n"
                                 results.append(result_text)
                         else:
-                            results.append(f"✅ **Tool Used:** web_search ({operation})")
+                            results.append(
+                                f"✅ **Tool Used:** web_search ({operation})"
+                            )
                     else:
-                        results.append(f"❌ **Tool Error:** web_search - {result.error}")
-                
+                        results.append(
+                            f"❌ **Tool Error:** web_search - {result.error}"
+                        )
+
             except Exception as e:
                 results.append(f"**Tool Error:** {str(e)}")
-        
+
         # Replace the original response with just the tool results if tools were used
         if results:
             # Remove JSON tool calls from the response
             import re
+
             # Remove JSON code blocks - more aggressive pattern
-            response = re.sub(r'```json.*?```', '', response, flags=re.DOTALL)
+            response = re.sub(r"```json.*?```", "", response, flags=re.DOTALL)
             # Remove any remaining code blocks
-            response = re.sub(r'```.*?```', '', response, flags=re.DOTALL)
+            response = re.sub(r"```.*?```", "", response, flags=re.DOTALL)
             # Remove leftover JSON-like patterns
-            response = re.sub(r'\{[\s\S]*?"tool_code"[\s\S]*?\}', '', response)
+            response = re.sub(r'\{[\s\S]*?"tool_code"[\s\S]*?\}', "", response)
             # Clean up extra whitespace
-            response = re.sub(r'\n\s*\n\s*\n+', '\n\n', response)
+            response = re.sub(r"\n\s*\n\s*\n+", "\n\n", response)
             response = response.strip()
-            
+
             # If response is mostly empty after removing code blocks, just show tool results
             if len(response.strip()) < 100:
                 return "\n\n".join(results)
             else:
                 return response + "\n\n" + "\n\n".join(results)
-        
+
         return response
-    
+
     async def build_project(
         self,
         description: str,
         language: str = None,
         framework: str = None,
         output_dir: str = None,
-        interactive: bool = False
+        interactive: bool = False,
     ) -> Dict[str, Any]:
         """Build a project based on description"""
-        
-        prompt = f"""Build a {language or 'appropriate'} project with the following description:
+
+        prompt = f"""Build a {language or "appropriate"} project with the following description:
 {description}
 
 Requirements:
-- Framework: {framework or 'most suitable'}
-- Output directory: {output_dir or 'current directory'}
+- Framework: {framework or "most suitable"}
+- Output directory: {output_dir or "current directory"}
 - Interactive mode: {interactive}
 
 Please create a complete, working project structure with:
@@ -1807,38 +2041,38 @@ Please create a complete, working project structure with:
 5. Basic tests if applicable
 
 Provide step-by-step implementation."""
-        
+
         response = await self.process_message(prompt)
-        
+
         return {
-            'status': 'completed',
-            'description': description,
-            'output_path': output_dir or '.',
-            'response': response
+            "status": "completed",
+            "description": description,
+            "output_path": output_dir or ".",
+            "response": response,
         }
-    
+
     async def analyze_project(
         self,
         project_path: str,
-        output_format: str = 'text',
+        output_format: str = "text",
         focus: str = None,
-        include_suggestions: bool = False
+        include_suggestions: bool = False,
     ) -> Any:
         """Analyze a project and provide insights"""
-        
+
         project_path = Path(project_path)
-        
+
         # Gather project information
         project_info = self._gather_project_info(project_path)
-        
+
         prompt = f"""Analyze the following project:
 
 Path: {project_path}
-Structure: {project_info['structure']}
-Languages: {project_info['languages']}
-Files: {len(project_info['files'])} files
+Structure: {project_info["structure"]}
+Languages: {project_info["languages"]}
+Files: {len(project_info["files"])} files
 
-Focus area: {focus or 'general analysis'}
+Focus area: {focus or "general analysis"}
 Include suggestions: {include_suggestions}
 Output format: {output_format}
 
@@ -1849,60 +2083,58 @@ Provide a comprehensive analysis including:
 4. Performance considerations
 5. Best practices compliance
 """
-        
+
         if include_suggestions:
             prompt += "\n6. Specific improvement suggestions"
-        
+
         response = await self.process_message(prompt, project_path=str(project_path))
-        
-        if output_format == 'json':
+
+        if output_format == "json":
             # Try to structure the response as JSON
             try:
                 return {
-                    'project_path': str(project_path),
-                    'analysis': response,
-                    'metadata': project_info,
-                    'timestamp': str(asyncio.get_event_loop().time())
+                    "project_path": str(project_path),
+                    "analysis": response,
+                    "metadata": project_info,
+                    "timestamp": str(asyncio.get_event_loop().time()),
                 }
             except Exception:
-                return {'analysis': response, 'error': 'Could not structure as JSON'}
-        
+                return {"analysis": response, "error": "Could not structure as JSON"}
+
         return response
-    
+
     def _gather_project_info(self, project_path: Path) -> Dict[str, Any]:
         """Gather basic information about a project"""
-        info = {
-            'structure': [],
-            'languages': set(),
-            'files': []
-        }
-        
+        info = {"structure": [], "languages": set(), "files": []}
+
         try:
-            for item in project_path.rglob('*'):
-                if item.is_file() and not any(part.startswith('.') for part in item.parts):
+            for item in project_path.rglob("*"):
+                if item.is_file() and not any(
+                    part.startswith(".") for part in item.parts
+                ):
                     relative_path = item.relative_to(project_path)
-                    info['files'].append(str(relative_path))
-                    
+                    info["files"].append(str(relative_path))
+
                     # Detect language by extension
                     suffix = item.suffix.lower()
                     language_map = {
-                        '.py': 'Python',
-                        '.js': 'JavaScript',
-                        '.ts': 'TypeScript',
-                        '.java': 'Java',
-                        '.cpp': 'C++',
-                        '.c': 'C',
-                        '.go': 'Go',
-                        '.rs': 'Rust',
-                        '.php': 'PHP',
-                        '.rb': 'Ruby'
+                        ".py": "Python",
+                        ".js": "JavaScript",
+                        ".ts": "TypeScript",
+                        ".java": "Java",
+                        ".cpp": "C++",
+                        ".c": "C",
+                        ".go": "Go",
+                        ".rs": "Rust",
+                        ".php": "PHP",
+                        ".rb": "Ruby",
                     }
-                    
+
                     if suffix in language_map:
-                        info['languages'].add(language_map[suffix])
-        
+                        info["languages"].add(language_map[suffix])
+
         except Exception as e:
-            info['error'] = str(e)
-        
-        info['languages'] = list(info['languages'])
+            info["error"] = str(e)
+
+        info["languages"] = list(info["languages"])
         return info
