@@ -7,6 +7,8 @@ import asyncio
 import logging
 import os
 import readline
+import signal
+import sys
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
@@ -69,11 +71,19 @@ from .rules import RulesManager
 
 console = Console()
 
+# Global flag to stop AI response
+stop_response = False
+
+def signal_handler(signum, frame):
+    """Handle Ctrl+X (SIGQUIT) to stop AI response"""
+    global stop_response
+    stop_response = True
+
 
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.1.0", prog_name="Cognautic CLI")
+@click.version_option(version="1.1.1", prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -153,9 +163,9 @@ def chat(provider, model, project_path, websocket_port, session):
         else:
             return
     
-    # Use provided provider or default
+    # Use provided provider or last used provider or default
     if not provider or not isinstance(provider, str):
-        provider = config_manager.get_config_value('default_provider') or available_providers[0]
+        provider = config_manager.get_config_value('last_provider') or config_manager.get_config_value('default_provider') or available_providers[0]
     
     if not config_manager.has_api_key(provider):
         console.print(f"❌ No API key found for {provider}. Available providers: {', '.join(available_providers)}", style="red")
@@ -173,6 +183,11 @@ def chat(provider, model, project_path, websocket_port, session):
     websocket_server = WebSocketServer(ai_engine, port=websocket_port)
     
     async def run_chat():
+        global stop_response
+        
+        # Set up Ctrl+X signal handler (SIGQUIT)
+        signal.signal(signal.SIGQUIT, signal_handler)
+        
         # Start WebSocket server
         server_task = asyncio.create_task(websocket_server.start())
         
@@ -197,8 +212,12 @@ def chat(provider, model, project_path, websocket_port, session):
             
             # Set workspace - use provided project_path or current working directory
             current_workspace = project_path or os.getcwd()
-            current_model = model  # Track current model in this scope
-            current_provider = provider  # Track current provider in this scope
+            # Load saved provider/model from config if not specified
+            saved_provider = config_manager.get_config_value('last_provider')
+            saved_model = config_manager.get_config_value('last_model')
+            
+            current_model = model or saved_model  # Track current model in this scope
+            current_provider = provider or saved_provider or 'openai'  # Track current provider in this scope
             session_created = False  # Track if session has been created
             
             # Store the original working directory where cognautic was run
@@ -299,27 +318,51 @@ def chat(provider, model, project_path, websocket_port, session):
                     # Stream the response character by character
                     console.print("[bold magenta]AI:[/bold magenta] ", end="")
                     full_response = ""
+                    response_stopped = False
+                    stop_response = False  # Reset stop flag
                     
-                    async for chunk in ai_engine.process_message_stream(
-                        user_input, 
-                        provider=current_provider, 
-                        model=current_model,
-                        project_path=current_workspace,
-                        conversation_history=conversation_history
-                    ):
-                        # Display character by character for typewriter effect
-                        for char in chunk:
-                            console.print(char, end="")
-                            full_response += char
-                            if typing_delay > 0:
-                                await asyncio.sleep(typing_delay)
+                    try:
+                        async for chunk in ai_engine.process_message_stream(
+                            user_input, 
+                            provider=current_provider, 
+                            model=current_model,
+                            project_path=current_workspace,
+                            conversation_history=conversation_history
+                        ):
+                            # Check if stop was requested
+                            if stop_response:
+                                response_stopped = True
+                                console.print("\n\n[yellow]⏸️  AI response stopped by user (Ctrl+X)[/yellow]")
+                                break
+                            
+                            # Display character by character for typewriter effect
+                            for char in chunk:
+                                # Check stop flag during character display too
+                                if stop_response:
+                                    response_stopped = True
+                                    console.print("\n\n[yellow]⏸️  AI response stopped by user (Ctrl+X)[/yellow]")
+                                    break
+                                console.print(char, end="")
+                                full_response += char
+                                if typing_delay > 0:
+                                    await asyncio.sleep(typing_delay)
+                            
+                            if response_stopped:
+                                break
+                    except KeyboardInterrupt:
+                        # Ctrl+C pressed - exit chat
+                        break
                     
                     console.print()  # New line after streaming
                     
-                    # Add AI response to memory
-                    memory_manager.add_message("assistant", full_response)
+                    # Add AI response to memory (even if stopped)
+                    if full_response:
+                        memory_manager.add_message("assistant", full_response)
+                    
+                    # Don't break - continue to next prompt
                     
                 except KeyboardInterrupt:
+                    # Ctrl+C pressed while waiting for user input - exit chat
                     break
                 except Exception as e:
                     console.print(f"❌ Error: {str(e)}", style="red")
@@ -569,9 +612,13 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                             return True
                     
                     context['provider'] = new_provider
+                    current_provider = new_provider  # Update current provider
+                    # Save the provider choice
+                    config_manager.set_config('last_provider', new_provider)
                     # Load saved model for this provider
                     saved_model = config_manager.get_provider_model(new_provider)
                     context['model'] = saved_model
+                    current_model = saved_model  # Update current model
                     console.print(f"✅ Switched to provider: {new_provider}")
                     if saved_model:
                         console.print(f"📌 Using saved model: {saved_model}")
@@ -580,9 +627,13 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     console.print("💡 Use /lmodel <path> to load a local model first", style="yellow")
             elif config_manager.has_api_key(new_provider):
                 context['provider'] = new_provider
+                current_provider = new_provider  # Update current provider
+                # Save the provider choice
+                config_manager.set_config('last_provider', new_provider)
                 # Load saved model for this provider
                 saved_model = config_manager.get_provider_model(new_provider)
                 context['model'] = saved_model
+                current_model = saved_model  # Update current model
                 console.print(f"✅ Switched to provider: {new_provider}")
                 if saved_model:
                     console.print(f"📌 Using saved model: {saved_model}")
@@ -705,11 +756,14 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             new_model = parts[1]
             context['model'] = new_model
             
-            # Save the model preference for the current provider
+            # Save the model preference for the current provider and globally
             current_provider = context.get('provider')
-            if current_provider:
-                config_manager = context.get('config_manager')
-                if config_manager:
+            config_manager = context.get('config_manager')
+            if config_manager:
+                # Save as last used model globally
+                config_manager.set_config('last_model', new_model)
+                # Save as default for this provider
+                if current_provider:
                     config_manager.set_provider_model(current_provider, new_model)
                     console.print(f"✅ Switched to model: {new_model}")
                     console.print(f"💾 Model saved as default for provider: {current_provider}")

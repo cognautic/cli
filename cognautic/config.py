@@ -58,9 +58,8 @@ class ConfigManager:
                 keyring.set_password("cognautic", "encryption_key", key)
             
             self.cipher = Fernet(key.encode())
-        except Exception as e:
-            console.print(f"⚠️ Warning: Could not initialize encryption: {e}", style="yellow")
-            # Fallback to no encryption (not recommended for production)
+        except Exception:
+            # Silently fallback to no encryption if keyring is not available
             self.cipher = None
     
     def get_config(self) -> Dict[str, Any]:

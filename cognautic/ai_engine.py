@@ -11,6 +11,7 @@ from pathlib import Path
 from .config import ConfigManager
 from .tools import ToolRegistry
 from .provider_endpoints import GenericAPIClient, get_all_providers, get_provider_config
+from .auto_continuation import AutoContinuationManager
 
 
 class AIProvider(ABC):
@@ -574,6 +575,7 @@ class AIEngine:
         self.tool_registry = ToolRegistry()
         self.providers = {}
         self.local_model_provider = None  # Track local model separately
+        self.auto_continuation = AutoContinuationManager(max_iterations=50)
         # Give AI engine unrestricted permissions
         from .tools.base import PermissionLevel
 
@@ -724,6 +726,9 @@ class AIEngine:
     ):
         """Process a user message and generate streaming AI response"""
 
+        # Reset auto-continuation counter for new message
+        self.auto_continuation.reset()
+
         # Use default provider if not specified
         if not provider:
             provider = self.config_manager.get_config_value("default_provider")
@@ -844,6 +849,32 @@ class AIEngine:
 
         return tool_calls
 
+    def _clean_model_syntax(self, text: str) -> str:
+        """Remove model-specific syntax tokens from response"""
+        import re
+        
+        # Remove common model-specific tokens
+        patterns = [
+            r'<\|start\|>',
+            r'<\|end\|>',
+            r'<\|channel\|>',
+            r'<\|message\|>',
+            r'<\|call\|>',
+            r'<\|calls\|>',
+            r'assistant\s+to=\w+\s+code',
+            r'analysis\s+to=\w+\s+code',
+            r'<\|[^|]+\|>',  # Any other pipe-delimited tokens
+        ]
+        
+        cleaned = text
+        for pattern in patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+        
+        # Remove multiple consecutive newlines left by token removal
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        
+        return cleaned.strip()
+
     async def _process_response_with_tools(
         self,
         response: str,
@@ -858,8 +889,11 @@ class AIEngine:
         import re
         import json
 
+        # Clean model-specific syntax tokens from response
+        response = self._clean_model_syntax(response)
+
         # Limit recursion to prevent infinite loops
-        MAX_RECURSION_DEPTH = 5  # Increased from 2 to allow more continuation
+        MAX_RECURSION_DEPTH = 999999  # Effectively unlimited - AI will continue until task is complete
         if recursion_depth >= MAX_RECURSION_DEPTH:
             # Silently stop recursion without warning
             yield response
@@ -877,6 +911,13 @@ class AIEngine:
             # No tools found, just yield the response
             yield response
             return
+
+        # Yield any text BEFORE the first tool call immediately
+        first_tool_pos = response.find("```json")
+        if first_tool_pos > 0:
+            text_before_tools = response[:first_tool_pos].strip()
+            if text_before_tools:
+                yield text_before_tools + "\n"
 
         # Process all tool calls first, collect results
         tool_results = []
@@ -927,17 +968,29 @@ class AIEngine:
                     )
                     if result.success:
                         command = args.get("command", "unknown")
-                        output = (
+                        stdout = (
                             result.data.get("stdout", "")
                             if isinstance(result.data, dict)
                             else str(result.data)
                         )
+                        stderr = result.data.get("stderr", "") if isinstance(result.data, dict) else ""
+                        
+                        # Combine stdout and stderr for full output
+                        full_output = stdout
+                        if stderr and stderr.strip():
+                            full_output += f"\n[stderr]\n{stderr}"
+                        
+                        # Truncate very long outputs for display (but keep full output in data)
+                        display_output = full_output
+                        if len(full_output) > 10000:
+                            display_output = full_output[:10000] + f"\n\n... [Output truncated - {len(full_output)} total characters]"
+                        
                         tool_results.append(
                             {
                                 "type": "command",
                                 "command": command,
-                                "output": output,
-                                "display": f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{output}\n```\n",
+                                "output": full_output,
+                                "display": f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{display_output}\n```\n",
                             }
                         )
                     else:
@@ -1169,13 +1222,8 @@ class AIEngine:
                     {"type": "error", "display": f"\n❌ **Tool Error:** {str(e)}\n"}
                 )
 
-        # Now yield the response with tool results integrated
+        # Now yield the tool results
         if tool_results:
-            # Show the initial part of the response (before first tool call)
-            first_tool_pos = response.find("```json")
-            if first_tool_pos > 0:
-                yield response[:first_tool_pos]
-
             # Show all tool results
             for tool_result in tool_results:
                 yield tool_result["display"]
@@ -1184,138 +1232,37 @@ class AIEngine:
             if should_end_response:
                 return
 
-            # Always generate a continuation response after tool execution
-            # This ensures the AI completes its thought after executing tools
-            needs_continuation = True
-
-            if needs_continuation and recursion_depth < MAX_RECURSION_DEPTH:
-                # Generate a final response that incorporates all tool results
-                tool_context = ""
-                has_file_read = False
-                has_file_write = False
-                has_web_search = False
-
-                for tool_result in tool_results:
-                    if tool_result["type"] == "command":
-                        tool_context += f"Command '{tool_result['command']}' output: {tool_result['output']}\n"
-                    elif tool_result["type"] == "file_read":
-                        has_file_read = True
-                        tool_context += f"File '{tool_result['file_path']}' contains: {tool_result['content']}\n"
-                    elif tool_result["type"] == "file_op":
-                        has_file_write = True
-                        tool_context += f"File operation completed successfully\n"
-                    elif tool_result["type"] == "web_search":
-                        has_web_search = True
-                        results = tool_result.get("results", [])
-                        tool_context += f"Web search for '{tool_result.get('query', 'unknown')}' returned {len(results)} results\n"
-                    elif tool_result["type"] == "web_fetch":
-                        has_web_search = True
-                        tool_context += f"Fetched content from '{tool_result.get('url', 'unknown')}': {tool_result.get('content', '')}\n"
-                    elif tool_result["type"] == "web_docs":
-                        has_web_search = True
-                        doc_data = tool_result.get("doc_data", {})
-                        tool_context += f"Documentation from '{tool_result.get('url', 'unknown')}': {doc_data.get('content', '')}\n"
-                    elif tool_result["type"] == "web_api_docs":
-                        has_web_search = True
-                        api_data = tool_result.get("api_data", {})
-                        tool_context += f"API documentation for '{tool_result.get('api_name', 'unknown')}': {api_data.get('content', '')}\n"
-
-                # Build continuation prompt based on what tools were executed
-                if has_web_search:
-                    # For web search results, provide context and ask AI to continue
-                    final_prompt = f"""Based on the web search/fetch results below, complete the user's request.
-
-Tool Results:
-{tool_context}
-
-Now:
-- Summarize the key information from the results
-- Answer the user's question based on the fetched content
-- If implementing something, use the information to create accurate code
-- Provide any additional context or recommendations
-
-When COMPLETELY DONE, call the end_response tool.
-
-Complete the request:"""
-                elif has_file_read:
-                    # For file reads, allow the AI to continue with modifications if needed
-                    final_prompt = f"""Based on the file content below, complete the user's request.
-
-Tool Results:
-{tool_context}
-
-If the user asked you to MODIFY/ADD features to the file:
-- Use write_file_lines to modify ONLY the specific sections that need changes
-- DO NOT use write_file with the entire file content - it will FAIL for large files
-- Make the changes in small, targeted sections
-
-If the user only asked to READ/ANALYZE, provide your analysis.
-
-When COMPLETELY DONE, call the end_response tool.
-
-Complete the request:"""
-                elif has_file_write:
-                    # For file writes/creates, continue if there's more work
-                    final_prompt = f"""The tool operations have been completed.
-
-Tool Results:
-{tool_context}
-
-If there are MORE files to modify or MORE changes needed to complete the user's request:
-- Continue with the remaining modifications
-- Use write_file_lines for targeted changes
-
-If EVERYTHING is complete:
-- Provide a brief summary
-- Call the end_response tool
-
-Continue:"""
-                else:
-                    # For commands or other operations
-                    final_prompt = f"""Based on the tool execution results below, continue your response to the user.
-
-Tool Results:
-{tool_context}
-
-Complete any remaining work, then call end_response when done.
-
-Continue your response:"""
-
-                final_messages = messages + [
-                    {"role": "assistant", "content": "I'll continue with the results."},
-                    {"role": "user", "content": final_prompt},
-                ]
-
-                # Use appropriate tokens for continuation
-                # Use unlimited tokens to ensure completion
-                max_tokens = config.get("max_tokens", None)
-                if max_tokens == 0 or max_tokens == -1:
-                    max_tokens = None
-                continuation_max_tokens = max_tokens or 16384
-
-                final_response = await ai_provider.generate_response(
-                    messages=final_messages,
+            # Use auto-continuation manager to determine if we should continue
+            if self.auto_continuation.should_continue(tool_results, should_end_response) and recursion_depth < MAX_RECURSION_DEPTH:
+                # Show continuation indicator
+                yield "\n🔄 **Auto-continuing...**\n"
+                
+                # Generate continuation response using auto-continuation manager
+                final_response = await self.auto_continuation.generate_continuation(
+                    ai_provider=ai_provider,
+                    messages=messages,
+                    tool_results=tool_results,
                     model=model,
-                    max_tokens=continuation_max_tokens,
-                    temperature=config.get("temperature", 0.7),
+                    config=config
                 )
 
-                # For file write continuations, strip out any tool calls to prevent loops
-                if has_file_write and self._contains_tool_calls(final_response):
-                    # Remove tool calls from the response
-                    import re
+                # Clean model-specific syntax from continuation response
+                final_response = self._clean_model_syntax(final_response)
 
-                    json_pattern = r"```json\s*\n.*?\n```"
-                    cleaned_response = re.sub(
-                        json_pattern, "", final_response, flags=re.DOTALL
-                    )
-                    yield f"\n{cleaned_response.strip()}"
-                elif self._contains_tool_calls(final_response):
-                    # For other cases, allow recursive processing but with depth limit
+                # Check if continuation response contains tool calls
+                if self._contains_tool_calls(final_response):
+                    # Extract and yield any text before the first tool call
+                    tool_call_start = final_response.find('```json')
+                    if tool_call_start > 0:
+                        text_before_tools = final_response[:tool_call_start].strip()
+                        if text_before_tools:
+                            yield f"\n{text_before_tools}\n"
+                    
+                    # Recursively process the continuation response with tools
                     async for chunk in self._process_response_with_tools(
                         final_response,
                         project_path,
-                        final_messages,
+                        messages,
                         ai_provider,
                         model,
                         config,
@@ -1323,6 +1270,7 @@ Continue your response:"""
                     ):
                         yield chunk
                 else:
+                    # No tool calls in continuation, just yield the response
                     yield f"\n{final_response}"
         else:
             # No tools, just yield the original response
@@ -1426,17 +1374,7 @@ Continue your response:"""
 IMPORTANT: You are operating within the Cognautic CLI environment. You can ONLY use the tools provided below. Do NOT suggest using external tools, IDEs, or commands that are not available in this CLI.
 
 Most Important Instruction:
-Before starting any project, always perform a web search about the project or topic you’re working on.
-
-:Documentation Requirement:
-
-Collect the key findings and relevant information.
-
-Create one or more Markdown (.md) files summarizing your research.
-
-Store these files inside an MD folder in the current project directory.
-
-These information files will serve as background documentation to guide project development.
+If the project is looking HARD, then perform a web search about the project or topic you’re going to work on.
 
 Your capabilities within Cognautic CLI:
 1. Code analysis and review
@@ -1768,6 +1706,141 @@ REMEMBER:
 3. Don't stop after one file - build complete, functional projects!
 4. NEVER promise to do something without including the tool calls to actually do it!
 5. For very long file content, the system will automatically handle it - just provide the full content
+
+═══════════════════════════════════════════════════════════════════════════════
+🎯 PROJECT COMPLETION CHECKLIST - MANDATORY FOR ALL PROJECT REQUESTS
+═══════════════════════════════════════════════════════════════════════════════
+
+When a user asks you to "build/create a [project type] app/project", you MUST complete ALL of these steps:
+
+✅ STEP 1: Research (if needed)
+   - Perform web search for best practices and current versions
+   - Create documentation in MD/ folder with findings
+
+✅ STEP 2: Create ALL Project Files
+   - Create directory structure
+   - Create ALL source files (components, styles, logic, etc.)
+   - Create configuration files
+   
+✅ STEP 3: Create package.json/requirements.txt (CRITICAL - DON'T SKIP!)
+   For JavaScript/Node.js/React projects:
+   - Create package.json with correct dependencies and versions
+   - Include proper scripts (start, build, test, dev)
+   - Add project metadata (name, version, description)
+   
+   For Python projects:
+   - Create requirements.txt with all dependencies
+   - Include version constraints where appropriate
+   
+✅ STEP 4: Install Dependencies (CRITICAL - DON'T SKIP!)
+   - Tell the user to run npm install (or yarn install) for JavaScript projects
+   - Tell the user to run pip install -r requirements.txt for Python projects
+   
+✅ STEP 5: Explanation
+   - Provide clear instructions to user
+
+✅ STEP 6: Final Summary
+   - List all files created
+   - Show how to run the project
+   - Mention any next steps or customization options
+
+⚠️ CRITICAL RULES:
+- DO NOT stop after creating source files - you MUST create package.json/requirements.txt!
+- DO NOT skip steps - complete the ENTIRE project setup!
+- DO NOT use end_response until ALL steps above are completed!
+- ALWAYS use end_response when done - NEVER leave the response hanging!
+
+📋 EXAMPLE COMPLETE FLOW FOR REACT APP:
+1. Web search for React best practices and current versions
+2. Create MD/ documentation files with findings
+3. Create public/index.html
+4. Create src/ directory with all components (App.js, index.js, etc.)
+5. Create src/index.css and component styles
+6. Create package.json with dependencies ← DON'T SKIP THIS!
+8. Provide instructions: npm install and npm start
+9. THEN use end_response
+
+If you find yourself about to use end_response, ask yourself:
+- Did I create package.json/requirements.txt? If NO → CREATE IT NOW!
+- Did I run npm install / pip install? If NO → RUN IT NOW!
+- Is the project ready to run? If NO → COMPLETE THE SETUP!
+
+═══════════════════════════════════════════════════════════════════════════════
+📦 COMMON PROJECT TYPES & REQUIRED FILES
+═══════════════════════════════════════════════════════════════════════════════
+
+REACT APP:
+✅ Must create: package.json, public/index.html, src/index.js, src/App.js, src/index.css
+✅ Must tell user to run: npm install
+✅ Dependencies: react, react-dom, react-scripts (check latest versions via web search)
+✅ Must tell user to run: npm start
+
+NODE.JS/EXPRESS APP:
+✅ Must create: package.json, server.js (or index.js), .env template
+✅ Must tell user to run: npm install
+✅ Dependencies: express, and any other needed packages
+✅ Must tell user to run: node server.js or npm start
+
+PYTHON APP:
+✅ Must create: requirements.txt, main.py (or app.py), README.md
+✅ Must tell user to run: pip install -r requirements.txt
+✅ Must tell user to run: python main.py
+
+NEXT.JS APP:
+✅ Must create: package.json, pages/index.js, pages/_app.js, public/ folder
+✅ Must tell user to run: npm install
+✅ Dependencies: next, react, react-dom (check latest versions)
+✅ Must tell user to run: npm run dev
+
+VITE + REACT APP:
+✅ Must create: package.json, index.html, src/main.jsx, src/App.jsx, vite.config.js
+✅ Must tell user to run: npm install
+✅ Dependencies: vite, react, react-dom, @vitejs/plugin-react
+✅ Must tell user to run: npm run dev
+
+REMEMBER: The project is NOT complete until dependencies are installed and it's ready to run!
+
+═══════════════════════════════════════════════════════════════════════════════
+📊 SHOWING DIFFS AND FILE PREVIEWS
+═══════════════════════════════════════════════════════════════════════════════
+
+When creating or modifying files, provide helpful context:
+
+FOR NEW FILES:
+- Show a preview of the file content (first 10-15 lines)
+- Indicate total line count
+- Mention key features or sections
+
+FOR MODIFIED FILES:
+- Show what changed (before/after snippets)
+- Highlight the specific lines modified
+- Explain why the change was made
+
+EXAMPLE OUTPUT FORMAT:
+✨ **File Created:** src/App.js
+📄 **Preview:**
+```javascript
+import React from 'react';
+import './App.css';
+
+function App() {
+  return (
+    <div className="App">
+      <h1>Welcome to My App</h1>
+    </div>
+  );
+}
+... (15 more lines)
+```
+📊 Total: 23 lines
+
+💾 **File Modified:** src/styles.css
+📝 **Changes:**
+- Line 5-8: Changed background color from white to dark theme
+- Line 12: Updated font size from 14px to 16px
+- Added: New dark mode variables (lines 20-25)
+
+This helps users understand what you've done without overwhelming them with full file contents.
 """
 
         # Add OS information to help AI use correct commands
