@@ -221,13 +221,18 @@ class FileOperationsTool(BaseTool):
         """Create a new file with content (alias for write_file)"""
         return await self._write_file(file_path, content, encoding, create_dirs=True)
     
-    async def _create_directory(self, dir_path: str, parents: bool = True) -> Dict[str, Any]:
-        """Create a directory"""
-        path = Path(dir_path)
-        path.mkdir(parents=parents, exist_ok=True)
+    async def _create_directory(self, dir_path: str = None, path: str = None, parents: bool = True) -> Dict[str, Any]:
+        """Create a directory (accepts either dir_path or path parameter)"""
+        # Accept both dir_path and path for flexibility
+        directory_path = dir_path or path
+        if not directory_path:
+            raise ValueError("Either 'dir_path' or 'path' parameter is required")
+        
+        dir_obj = Path(directory_path)
+        dir_obj.mkdir(parents=parents, exist_ok=True)
         
         return {
-            'directory_path': str(path),
+            'directory_path': str(dir_obj),
             'created': True
         }
     

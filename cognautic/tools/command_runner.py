@@ -59,11 +59,11 @@ class CommandRunnerTool(BaseTool):
         self,
         command: str,
         cwd: str = None,
-        timeout: int = 30,
+        timeout: int = 300,
         capture_output: bool = True,
         shell: bool = True
     ) -> Dict[str, Any]:
-        """Run a command synchronously"""
+        """Run a command synchronously (default timeout: 5 minutes for long-running commands)"""
         
         try:
             if shell:
