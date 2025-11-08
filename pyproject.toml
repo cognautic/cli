@@ -9,10 +9,10 @@ description = "A Python-based CLI AI coding agent that provides agentic developm
 readme = "README.md"
 license = {text = "Proprietary - All Rights Reserved"}
 authors = [
-    {name = "Cognautic Team", email = "cognautic@gmail.com"}
+    {name = "Cognautic", email = "cognautic@gmail.com"}
 ]
 maintainers = [
-    {name = "Cognautic Team", email = "cognautic@gmail.com"}
+    {name = "Cognautic", email = "cognautic@gmail.com"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -66,10 +66,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/cognautic/cognautic-cli"
-Documentation = "https://cognautic-cli.readthedocs.io"
-Repository = "https://github.com/cognautic/cognautic-cli.git"
-Issues = "https://github.com/cognautic/cognautic-cli/issues"
+Homepage = "https://github.com/cognautic/cli"
+Documentation = "https://cognautic.vercel.app/cognautic-cli.html"
+Repository = "https://github.com/cognautic/cli.git"
+Issues = "https://github.com/cognautic/cli/issues"
 Changelog = "https://github.com/cognautic/cognautic-cli/blob/main/CHANGELOG.md"
 
 [project.scripts]
