@@ -43,8 +43,60 @@ class AutoContinuationManager:
         if self.iteration_count >= self.max_iterations:
             return False
         
-        # Continue if there were tool executions
-        if tool_results:
+        # Don't continue if no tools were executed
+        if not tool_results:
+            return False
+        
+        # Check if there were any errors
+        has_errors = any(r.get('type') == 'error' for r in tool_results)
+        
+        # Check what types of tools were executed
+        has_file_ops = any(r.get('type') in ['file_op', 'file_write', 'file_read'] for r in tool_results)
+        has_commands = any(r.get('type') == 'command' for r in tool_results)
+        has_background_commands = any(
+            r.get('type') == 'command' and 'background' in str(r.get('command', ''))
+            for r in tool_results
+        )
+        
+        # Check if commands were exploratory (ls, pwd, dir, etc.)
+        exploratory_commands = ['ls', 'pwd', 'dir', 'cd', 'find', 'tree', 'cat', 'head', 'tail']
+        has_exploratory_commands = any(
+            r.get('type') == 'command' and 
+            any(cmd in str(r.get('command', '')).lower() for cmd in exploratory_commands)
+            for r in tool_results
+        )
+        
+        # Smart continuation logic:
+        # 1. If there are errors, continue to let AI handle them
+        if has_errors:
+            self.iteration_count += 1
+            return True
+        
+        # 2. If only file operations were done, likely need to run commands next
+        if has_file_ops and not has_commands:
+            self.iteration_count += 1
+            return True
+        
+        # 3. If only exploratory commands (ls, pwd, etc.), continue to do actual work
+        if has_exploratory_commands and not has_file_ops:
+            self.iteration_count += 1
+            return True
+        
+        # 4. If background commands were started AND files created, task likely complete
+        if has_background_commands and has_file_ops:
+            return False
+        
+        # 5. If only background commands (no files), don't continue (they're running)
+        if has_background_commands and not has_file_ops:
+            return False
+        
+        # 6. If regular commands executed with file ops, task likely complete
+        if has_commands and has_file_ops and not has_exploratory_commands:
+            return False
+        
+        # 7. Default: Continue if we're early in the process
+        # This ensures AI completes the full task
+        if self.iteration_count < 3:
             self.iteration_count += 1
             return True
         

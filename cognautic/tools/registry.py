@@ -48,6 +48,7 @@ class ToolRegistry:
         from .web_search import WebSearchTool
         from .code_analysis import CodeAnalysisTool
         from .response_control import ResponseControlTool
+        from .file_reader import FileReaderTool
         
         # Register tools
         self.register_tool(FileOperationsTool())
@@ -55,6 +56,7 @@ class ToolRegistry:
         self.register_tool(WebSearchTool())
         self.register_tool(CodeAnalysisTool())
         self.register_tool(ResponseControlTool())
+        self.register_tool(FileReaderTool())
     
     def register_tool(self, tool: BaseTool):
         """Register a tool"""

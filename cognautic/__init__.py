@@ -2,6 +2,6 @@
 Cognautic CLI - A Python-based CLI AI coding agent
 """
 
-__version__ = "1.1.1"
-__author__ = "cognautic"
-__email__ = "team@cognautic.com"
+__version__ = "1.1.2"
+__author__ = "Cognautic"
+__email__ = "cognautic@gmail.com"

@@ -8,8 +8,12 @@ import logging
 import os
 import readline
 import signal
-import sys
 from pathlib import Path
+import sys
+import subprocess
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.formatted_text import HTML
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -83,7 +87,7 @@ def signal_handler(signum, frame):
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.1.1", prog_name="Cognautic CLI")
+@click.version_option(version="1.1.2", prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -193,6 +197,7 @@ def chat(provider, model, project_path, websocket_port, session):
         
         try:
             console.print("💡 Type '/help' for commands, 'exit' to quit")
+            console.print("💡 Press Shift+Tab to toggle Terminal mode")
             if project_path:
                 console.print(f"📁 Working in: {project_path}")
             
@@ -238,21 +243,81 @@ def chat(provider, model, project_path, websocket_port, session):
             # Show current workspace
             console.print(f"📁 Workspace: {current_workspace}")
             
+            # Terminal mode state
+            terminal_mode = [False]  # Use list to make it mutable in nested function
+            
+            # Setup key bindings for Shift+Tab toggle
+            bindings = KeyBindings()
+            
+            @bindings.add('s-tab')  # Shift+Tab
+            def toggle_mode(event):
+                terminal_mode[0] = not terminal_mode[0]
+                mode_name = "🖥️  Terminal" if terminal_mode[0] else "💬 Chat"
+                # Clear current line and show mode switch message
+                event.app.current_buffer.text = ''
+                event.app.exit(result='__MODE_TOGGLE__')
+            
+            # Create prompt session
+            session = PromptSession(key_bindings=bindings)
+            
+            console.print("[dim]💡 Press Shift+Tab to toggle between Chat and Terminal modes[/dim]\n")
+            
             while True:
                 try:
-                    # Show current workspace in prompt
+                    # Show current workspace and mode in prompt
                     workspace_info = f" [{Path(current_workspace).name}]" if current_workspace else ""
+                    mode_indicator = "🖥️ " if terminal_mode[0] else ""
                     
-                    # Use readline delimiters for non-printing characters to fix text reordering
-                    # \001 and \002 tell readline that the enclosed characters don't take up space
-                    # This prevents cursor position issues when editing
-                    # ANSI color codes: \033[1;36m = bold cyan, \033[0m = reset
-                    prompt = f"\001\033[1;36m\002You{workspace_info}:\001\033[0m\002 "
-                    user_input = input(prompt)
+                    prompt_text = HTML(f'<ansibrightcyan><b>{mode_indicator}You{workspace_info}:</b></ansibrightcyan> ')
+                    user_input = await session.prompt_async(prompt_text)
+                    
+                    # Handle mode toggle
+                    if user_input == '__MODE_TOGGLE__':
+                        mode_name = "🖥️  Terminal" if terminal_mode[0] else "💬 Chat"
+                        console.print(f"[bold yellow]Switched to {mode_name} mode[/bold yellow]")
+                        console.print("[dim]Press Shift+Tab to toggle modes[/dim]")
+                        continue
                     
                     if user_input.lower() in ['exit', 'quit']:
                         break
                     
+                    # Handle terminal mode
+                    if terminal_mode[0]:
+                        if not user_input.strip():
+                            continue
+                        
+                        # Execute command in terminal mode
+                        try:
+                            # Change to current workspace directory
+                            original_dir = os.getcwd()
+                            os.chdir(current_workspace)
+                            
+                            # Run command and capture output
+                            result = subprocess.run(
+                                user_input,
+                                shell=True,
+                                capture_output=True,
+                                text=True,
+                                cwd=current_workspace
+                            )
+                            
+                            # Show output
+                            if result.stdout:
+                                console.print(result.stdout, end='')
+                            if result.stderr:
+                                console.print(f"[red]{result.stderr}[/red]", end='')
+                            
+                            # Show exit code if non-zero
+                            if result.returncode != 0:
+                                console.print(f"[yellow]Exit code: {result.returncode}[/yellow]")
+                            
+                            # Change back to original directory
+                            os.chdir(original_dir)
+                            
+                        except Exception as e:
+                            console.print(f"[red]Error executing command: {str(e)}[/red]")
+                        
+                        continue
                     
                     # Handle slash commands
                     if user_input.startswith('/'):
@@ -1022,6 +1087,58 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         console.print("💬 Chat cleared")
         return True
     
+    elif cmd == "ps" or cmd == "processes":
+        # List all running background processes
+        try:
+            result = await ai_engine.tool_registry.execute_tool(
+                "command_runner",
+                operation="check_process_status",
+                user_id="ai_engine"
+            )
+            
+            if result.success and result.data:
+                processes = result.data.get('processes', [])
+                if not processes:
+                    console.print("📋 No background processes running", style="dim")
+                else:
+                    console.print(f"\n📋 Running Processes ({len(processes)}):", style="bold")
+                    for proc in processes:
+                        status_color = "green" if proc['status'] == 'running' else "yellow"
+                        console.print(f"  • PID: {proc['process_id']} - {proc['command'][:50]}... [{proc['status']}]", style=status_color)
+                        console.print(f"    Running for: {proc['running_time']:.1f}s", style="dim")
+                    console.print("\n💡 Use /ct <process_id> to terminate a process\n", style="dim")
+            else:
+                console.print("❌ Failed to get process list", style="red")
+        except Exception as e:
+            console.print(f"❌ Error: {str(e)}", style="red")
+        
+        return True
+    
+    elif cmd == "ct" or cmd == "cancel":
+        # Cancel/terminate a background process
+        if len(parts) < 2:
+            console.print("❌ Usage: /ct <process_id>", style="red")
+            console.print("💡 Tip: Process IDs are shown when commands run in background", style="dim")
+            return True
+        
+        process_id = parts[1]
+        try:
+            result = await ai_engine.tool_registry.execute_tool(
+                "command_runner",
+                operation="kill_process",
+                process_id=process_id,
+                user_id="ai_engine"
+            )
+            
+            if result.success:
+                console.print(f"✅ Process {process_id} terminated successfully", style="green")
+            else:
+                console.print(f"❌ Failed to terminate process: {result.error}", style="red")
+        except Exception as e:
+            console.print(f"❌ Error: {str(e)}", style="red")
+        
+        return True
+    
     elif cmd == "exit" or cmd == "quit":
         return False
     
@@ -1033,6 +1150,7 @@ def show_help():
     """Show help information"""
     help_text = Text()
     help_text.append("Available commands:\n", style="bold")
+    help_text.append("• Press Shift+Tab - Toggle between Chat and Terminal modes\n", style="bold yellow")
     help_text.append("• /help - Show this help message\n")
     help_text.append("• /workspace <path> or /ws <path> - Change working directory\n")
     help_text.append("• /setup - Run interactive setup wizard\n")
@@ -1050,6 +1168,8 @@ def show_help():
     help_text.append("  - /rules remove workspace <index> - Remove a workspace rule\n", style="dim")
     help_text.append("  - /rules clear global|workspace - Clear all rules of a type\n", style="dim")
     help_text.append("• /speed [instant|fast|normal|slow|<number>] - Set typing speed for AI responses\n")
+    help_text.append("• /ps or /processes - List all running background processes\n")
+    help_text.append("• /ct <process_id> or /cancel <process_id> - Terminate a background process\n")
     help_text.append("• /clear - Clear chat screen\n")
     help_text.append("• /exit or /quit - Exit chat session\n")
     help_text.append("• exit or quit - Exit chat session\n")

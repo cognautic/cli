@@ -779,19 +779,273 @@ class AIEngine:
         if max_tokens == 0 or max_tokens == -1:
             max_tokens = None  # Treat 0 or -1 as unlimited
 
-        # Generate response and process with tools
-        response = await ai_provider.generate_response(
-            messages=messages,
-            model=model,
-            max_tokens=max_tokens or 16384,  # Use large default if None
-            temperature=config.get("temperature", 0.7),
-        )
-
-        # Process response with tools
-        async for chunk in self._process_response_with_tools(
-            response, project_path, messages, ai_provider, model, config
+        # Stream response with real-time tool detection and execution
+        async for chunk in self._stream_with_live_tools(
+            ai_provider, messages, model, max_tokens, config, project_path
         ):
             yield chunk
+
+    async def _stream_with_live_tools(
+        self,
+        ai_provider,
+        messages: list,
+        model: str,
+        max_tokens: int,
+        config: dict,
+        project_path: str,
+        recursion_depth: int = 0,
+    ):
+        """Stream AI response with real-time tool detection and execution"""
+        import re
+        import json
+        
+        # Prevent infinite recursion
+        MAX_RECURSION_DEPTH = 10
+        if recursion_depth >= MAX_RECURSION_DEPTH:
+            yield "\n⚠️ **Warning:** Maximum continuation depth reached.\n"
+            return
+        
+        # Buffer to accumulate streaming response
+        buffer = ""
+        yielded_length = 0
+        in_json_block = False
+        json_block_start = -1
+        has_executed_tools = False
+        tool_results = []
+        
+        # Check if provider supports streaming
+        if not hasattr(ai_provider, 'generate_response_stream'):
+            # Fall back to non-streaming
+            response = await ai_provider.generate_response(
+                messages=messages,
+                model=model,
+                max_tokens=max_tokens or 16384,
+                temperature=config.get("temperature", 0.7),
+            )
+            async for chunk in self._process_response_with_tools(
+                response, project_path, messages, ai_provider, model, config
+            ):
+                yield chunk
+            return
+        
+        # Stream the response
+        try:
+            async for chunk in ai_provider.generate_response_stream(
+                messages=messages,
+                model=model,
+                max_tokens=max_tokens or 16384,
+                temperature=config.get("temperature", 0.7),
+            ):
+                if not chunk:
+                    continue
+                
+                buffer += chunk
+                
+                # Check for JSON block markers
+                if not in_json_block:
+                    # Look for start of JSON block
+                    json_start_match = re.search(r'```json\s*\n', buffer[yielded_length:])
+                    if json_start_match:
+                        # Found start of JSON block
+                        in_json_block = True
+                        json_block_start = yielded_length + json_start_match.start()
+                        
+                        # Yield everything BEFORE the JSON block
+                        if json_block_start > yielded_length:
+                            text_to_yield = buffer[yielded_length:json_block_start]
+                            text_to_yield = self._clean_model_syntax(text_to_yield)
+                            if text_to_yield.strip():
+                                yield text_to_yield
+                        yielded_length = json_block_start
+                    else:
+                        # No JSON block yet, yield new content (keep small buffer)
+                        if len(buffer) > yielded_length + 10:
+                            text_to_yield = buffer[yielded_length:-10]
+                            text_to_yield = self._clean_model_syntax(text_to_yield)
+                            if text_to_yield:
+                                yield text_to_yield
+                            yielded_length = len(buffer) - 10
+                else:
+                    # Inside JSON block, look for the end
+                    json_end_match = re.search(r'\n```', buffer[json_block_start:])
+                    if json_end_match:
+                        # Found end of JSON block
+                        json_block_end = json_block_start + json_end_match.end()
+                        
+                        # Extract the complete JSON block
+                        json_block = buffer[json_block_start:json_block_end]
+                        
+                        # Parse and execute the tool call immediately
+                        json_pattern = r'```json\s*\n(.*?)\n```'
+                        match = re.search(json_pattern, json_block, re.DOTALL)
+                        if match:
+                            try:
+                                tool_call = json.loads(match.group(1).strip())
+                                
+                                # Execute tool and yield result immediately
+                                async for tool_result in self._execute_single_tool_live(
+                                    tool_call, project_path, tool_results
+                                ):
+                                    yield tool_result
+                                    
+                                has_executed_tools = True
+                                
+                            except json.JSONDecodeError as je:
+                                yield f"\n⚠️ **JSON Parse Warning:** {str(je)}\n"
+                        
+                        # Update state
+                        in_json_block = False
+                        yielded_length = json_block_end
+                        json_block_start = -1
+            
+            # Yield any remaining content
+            if yielded_length < len(buffer):
+                remaining = buffer[yielded_length:]
+                if not in_json_block:
+                    remaining = self._clean_model_syntax(remaining)
+                    if remaining.strip():
+                        yield remaining
+            
+            # Check if end_response was called
+            has_end_response = any(r.get("type") == "control" and r.get("message") == "end_response" for r in tool_results)
+            
+            # Don't auto-continue if:
+            # 1. end_response was explicitly called
+            # 2. No tools were executed
+            # 3. Max recursion depth reached
+            if has_end_response or not has_executed_tools or recursion_depth >= MAX_RECURSION_DEPTH:
+                return
+            
+            # Only continue if the auto-continuation manager says so
+            if self.auto_continuation.should_continue(tool_results, has_end_response):
+                yield "\n\n🔄 **Auto-continuing...**\n\n"
+                
+                # Add assistant's response to messages
+                messages.append({"role": "assistant", "content": buffer})
+                
+                # Generate continuation
+                final_response = await self.auto_continuation.generate_continuation(
+                    ai_provider=ai_provider,
+                    messages=messages,
+                    tool_results=tool_results,
+                    model=model,
+                    config=config
+                )
+                
+                # Recursively stream continuation
+                async for chunk in self._stream_with_live_tools(
+                    ai_provider, messages, model, max_tokens, config, project_path, recursion_depth + 1
+                ):
+                    yield chunk
+                    
+        except Exception as e:
+            import traceback
+            yield f"\n❌ **Streaming Error:** {str(e)}\n"
+            yield f"\n**Traceback:**\n{traceback.format_exc()}\n"
+
+    async def _execute_single_tool_live(self, tool_call: dict, project_path: str, tool_results: list):
+        """Execute a single tool call and yield the result immediately"""
+        try:
+            tool_name = tool_call.get("tool_code")
+            args = tool_call.get("args", {})
+
+            # Check for response control tool
+            if tool_name == "response_control":
+                operation = args.get("operation", "end_response")
+                if operation == "end_response":
+                    yield "\n✅ **Response Completed**\n"
+                    tool_results.append({"type": "control", "message": "end_response"})
+                return
+
+            # Execute the tool (reuse existing tool execution logic)
+            if tool_name == "command_runner":
+                cmd_args = args.copy()
+                if "operation" not in cmd_args:
+                    cmd_args["operation"] = "run_command"
+                if "cwd" not in cmd_args:
+                    cmd_args["cwd"] = project_path or "."
+
+                result = await self.tool_registry.execute_tool(
+                    "command_runner", user_id="ai_engine", **cmd_args
+                )
+                
+                if result.success:
+                    command = args.get("command", "unknown")
+                    operation = cmd_args.get("operation", "run_command")
+                    
+                    if operation == "run_async_command":
+                        process_id = result.data.get("process_id", "unknown")
+                        pid = result.data.get("pid", "unknown")
+                        yield f"\n✅ **Tool Used:** command_runner (background)\n⚡ **Command:** {command}\n🔄 **Status:** Running in background\n📋 **Process ID:** {process_id} (PID: {pid})\n💡 **Tip:** Use `/ct {process_id}` to terminate\n"
+                        tool_results.append({"type": "command", "command": command, "success": True})
+                    else:
+                        stdout = result.data.get("stdout", "") if isinstance(result.data, dict) else str(result.data)
+                        stderr = result.data.get("stderr", "") if isinstance(result.data, dict) else ""
+                        
+                        full_output = stdout
+                        if stderr and stderr.strip():
+                            full_output += f"\n[stderr]\n{stderr}"
+                        
+                        display_output = full_output
+                        if len(full_output) > 10000:
+                            display_output = full_output[:10000] + f"\n\n... [Output truncated]"
+                        
+                        yield f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{display_output}\n```\n"
+                        tool_results.append({"type": "command", "command": command, "output": full_output, "success": True})
+                else:
+                    yield f"\n❌ **Command Error:** {result.error}\n"
+                    tool_results.append({"type": "error", "error": result.error, "success": False})
+
+            elif tool_name == "file_operations":
+                file_path = args.get("file_path")
+                if file_path and project_path:
+                    from pathlib import Path
+                    path = Path(file_path)
+                    if not path.is_absolute():
+                        args["file_path"] = str(Path(project_path) / file_path)
+
+                result = await self.tool_registry.execute_tool(
+                    "file_operations", user_id="ai_engine", **args
+                )
+                
+                if result.success:
+                    operation = args.get("operation")
+                    file_path = args.get("file_path")
+                    yield f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n"
+                    tool_results.append({"type": "file_op", "operation": operation, "success": True})
+                else:
+                    yield f"\n❌ **File Error:** {result.error}\n"
+                    tool_results.append({"type": "error", "error": result.error, "success": False})
+
+            elif tool_name == "web_search":
+                result = await self.tool_registry.execute_tool(
+                    "web_search", user_id="ai_engine", **args
+                )
+                
+                if result.success:
+                    operation = args.get("operation", "search_web")
+                    yield f"\n✅ **Tool Used:** web_search ({operation})\n"
+                    tool_results.append({"type": "web_search", "operation": operation, "success": True})
+                else:
+                    yield f"\n❌ **Web Search Error:** {result.error}\n"
+                    tool_results.append({"type": "error", "error": result.error, "success": False})
+
+            elif tool_name == "file_reader":
+                result = await self.tool_registry.execute_tool(
+                    "file_reader", user_id="ai_engine", **args
+                )
+                
+                if result.success:
+                    operation = args.get("operation")
+                    yield f"\n✅ **Tool Used:** file_reader ({operation})\n"
+                    tool_results.append({"type": "file_read", "operation": operation, "success": True})
+                else:
+                    yield f"\n❌ **File Reader Error:** {result.error}\n"
+                    tool_results.append({"type": "error", "error": result.error, "success": False})
+
+        except Exception as e:
+            yield f"\n❌ **Tool Error:** {str(e)}\n"
+            tool_results.append({"type": "error", "error": str(e), "success": False})
 
     def _parse_alternative_tool_calls(self, response: str):
         """Parse tool calls from alternative formats (e.g., GPT-OSS with special tokens)"""
@@ -919,9 +1173,10 @@ class AIEngine:
             if text_before_tools:
                 yield text_before_tools + "\n"
 
-        # Process all tool calls first, collect results
+        # Process and execute tool calls LIVE - show results immediately
         tool_results = []
         should_end_response = False
+        has_executed_tools = False
 
         # Combine standard JSON matches and alternative format tool calls
         all_tool_calls = []
@@ -947,13 +1202,12 @@ class AIEngine:
                     operation = args.get("operation", "end_response")
                     if operation == "end_response":
                         should_end_response = True
-                        tool_results.append(
-                            {
-                                "type": "control",
-                                "display": f"\n✅ **Response Completed**\n",
-                            }
-                        )
+                        yield "\n✅ **Response Completed**\n"
+                        tool_results.append({"type": "control", "message": "end_response"})
                     continue
+
+                # Mark that we've executed tools
+                has_executed_tools = True
 
                 # Execute the tool
                 if tool_name == "command_runner":
@@ -968,38 +1222,56 @@ class AIEngine:
                     )
                     if result.success:
                         command = args.get("command", "unknown")
-                        stdout = (
-                            result.data.get("stdout", "")
-                            if isinstance(result.data, dict)
-                            else str(result.data)
-                        )
-                        stderr = result.data.get("stderr", "") if isinstance(result.data, dict) else ""
+                        operation = cmd_args.get("operation", "run_command")
                         
-                        # Combine stdout and stderr for full output
-                        full_output = stdout
-                        if stderr and stderr.strip():
-                            full_output += f"\n[stderr]\n{stderr}"
-                        
-                        # Truncate very long outputs for display (but keep full output in data)
-                        display_output = full_output
-                        if len(full_output) > 10000:
-                            display_output = full_output[:10000] + f"\n\n... [Output truncated - {len(full_output)} total characters]"
-                        
-                        tool_results.append(
-                            {
+                        # Check if this is an async command
+                        if operation == "run_async_command":
+                            # Background command - show process ID
+                            process_id = result.data.get("process_id", "unknown")
+                            pid = result.data.get("pid", "unknown")
+                            display_msg = f"\n✅ **Tool Used:** command_runner (background)\n⚡ **Command:** {command}\n🔄 **Status:** Running in background\n📋 **Process ID:** {process_id} (PID: {pid})\n💡 **Tip:** Use `/ct {process_id}` to terminate this process\n"
+                            yield display_msg
+                            tool_results.append({
+                                "type": "command",
+                                "command": command,
+                                "output": f"Background process started: {process_id}",
+                                "success": True
+                            })
+                        else:
+                            # Synchronous command - show output
+                            stdout = (
+                                result.data.get("stdout", "")
+                                if isinstance(result.data, dict)
+                                else str(result.data)
+                            )
+                            stderr = result.data.get("stderr", "") if isinstance(result.data, dict) else ""
+                            
+                            # Combine stdout and stderr for full output
+                            full_output = stdout
+                            if stderr and stderr.strip():
+                                full_output += f"\n[stderr]\n{stderr}"
+                            
+                            # Truncate very long outputs for display (but keep full output in data)
+                            display_output = full_output
+                            if len(full_output) > 10000:
+                                display_output = full_output[:10000] + f"\n\n... [Output truncated - {len(full_output)} total characters]"
+                            
+                            display_msg = f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{display_output}\n```\n"
+                            yield display_msg
+                            tool_results.append({
                                 "type": "command",
                                 "command": command,
                                 "output": full_output,
-                                "display": f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{display_output}\n```\n",
-                            }
-                        )
+                                "success": True
+                            })
                     else:
-                        tool_results.append(
-                            {
-                                "type": "error",
-                                "display": f"\n❌ **Command Error:** {result.error}\n",
-                            }
-                        )
+                        error_msg = f"\n❌ **Command Error:** {result.error}\n"
+                        yield error_msg
+                        tool_results.append({
+                            "type": "error",
+                            "error": result.error,
+                            "success": False
+                        })
 
                 elif tool_name == "file_operations":
                     # Prepend project_path to relative file paths
@@ -1042,14 +1314,14 @@ class AIEngine:
                                 total = result.data.get("total_lines", 0)
                                 line_info = f" (lines {start}-{end} of {total})"
 
-                            tool_results.append(
-                                {
-                                    "type": "file_read",
-                                    "file_path": file_path,
-                                    "content": content,  # Full content for AI processing
-                                    "display": f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n📄 **Result:**\n```\n{display_content}\n```\n",
-                                }
-                            )
+                            display_msg = f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n📄 **Result:**\n```\n{display_content}\n```\n"
+                            yield display_msg
+                            tool_results.append({
+                                "type": "file_read",
+                                "file_path": file_path,
+                                "content": content,
+                                "success": True
+                            })
                         elif operation == "write_file_lines":
                             # Show line range info for write_file_lines
                             line_info = ""
@@ -1058,26 +1330,17 @@ class AIEngine:
                                 end = result.data.get("end_line", 1)
                                 lines_written = result.data.get("lines_written", 0)
                                 line_info = f" (lines {start}-{end}, {lines_written} lines written)"
-                            tool_results.append(
-                                {
-                                    "type": "file_op",
-                                    "display": f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n",
-                                }
-                            )
+                            display_msg = f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n"
+                            yield display_msg
+                            tool_results.append({"type": "file_op", "operation": operation, "success": True})
                         else:
-                            tool_results.append(
-                                {
-                                    "type": "file_op",
-                                    "display": f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n",
-                                }
-                            )
+                            display_msg = f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n"
+                            yield display_msg
+                            tool_results.append({"type": "file_op", "operation": operation, "success": True})
                     else:
-                        tool_results.append(
-                            {
-                                "type": "error",
-                                "display": f"\n❌ **File Error:** {result.error}\n",
-                            }
-                        )
+                        error_msg = f"\n❌ **File Error:** {result.error}\n"
+                        yield error_msg
+                        tool_results.append({"type": "error", "error": result.error, "success": False})
 
                 elif tool_name == "web_search":
                     operation = args.get("operation", "search_web")
@@ -1100,14 +1363,13 @@ class AIEngine:
                                 )
                                 result_text += f"   🔗 {item.get('url', 'No URL')}\n"
 
-                            tool_results.append(
-                                {
-                                    "type": "web_search",
-                                    "query": query,
-                                    "results": search_results,
-                                    "display": result_text,
-                                }
-                            )
+                            yield result_text
+                            tool_results.append({
+                                "type": "web_search",
+                                "query": query,
+                                "results": search_results,
+                                "success": True
+                            })
 
                         elif operation == "fetch_url_content":
                             url = args.get("url", "unknown")
@@ -1135,14 +1397,8 @@ class AIEngine:
                                 f"**Content:**\n```\n{display_content}\n```\n"
                             )
 
-                            tool_results.append(
-                                {
-                                    "type": "web_fetch",
-                                    "url": url,
-                                    "content": content,  # Full content for AI processing
-                                    "display": result_text,
-                                }
-                            )
+                            yield result_text
+                            tool_results.append({"type": "web_fetch", "url": url, "content": content, "success": True})
 
                         elif operation == "parse_documentation":
                             url = args.get("url", "unknown")
@@ -1162,14 +1418,8 @@ class AIEngine:
                                         f"\n• {section.get('title', 'Untitled')}\n"
                                     )
 
-                            tool_results.append(
-                                {
-                                    "type": "web_docs",
-                                    "url": url,
-                                    "doc_data": doc_data,
-                                    "display": result_text,
-                                }
-                            )
+                            yield result_text
+                            tool_results.append({"type": "web_docs", "url": url, "doc_data": doc_data, "success": True})
 
                         elif operation == "get_api_docs":
                             api_name = args.get("api_name", "unknown")
@@ -1187,53 +1437,35 @@ class AIEngine:
                                 result_text += f"📚 **API:** {api_name}\n"
                                 result_text += f"❌ {api_data.get('message', 'Documentation not found')}\n"
 
-                            tool_results.append(
-                                {
-                                    "type": "web_api_docs",
-                                    "api_name": api_name,
-                                    "api_data": api_data,
-                                    "display": result_text,
-                                }
-                            )
+                            yield result_text
+                            tool_results.append({"type": "web_api_docs", "api_name": api_name, "api_data": api_data, "success": True})
                         else:
-                            tool_results.append(
-                                {
-                                    "type": "web_search",
-                                    "display": f"\n✅ **Tool Used:** web_search ({operation})\n",
-                                }
-                            )
+                            display_msg = f"\n✅ **Tool Used:** web_search ({operation})\n"
+                            yield display_msg
+                            tool_results.append({"type": "web_search", "operation": operation, "success": True})
                     else:
-                        tool_results.append(
-                            {
-                                "type": "error",
-                                "display": f"\n❌ **Web Search Error:** {result.error}\n",
-                            }
-                        )
+                        error_msg = f"\n❌ **Web Search Error:** {result.error}\n"
+                        yield error_msg
+                        tool_results.append({"type": "error", "error": result.error, "success": False})
 
             except json.JSONDecodeError as e:
-                tool_results.append(
-                    {
-                        "type": "error",
-                        "display": f"\n❌ **JSON Parse Error:** {str(e)}\n",
-                    }
-                )
+                error_msg = f"\n❌ **JSON Parse Error:** {str(e)}\n"
+                yield error_msg
+                tool_results.append({"type": "error", "error": str(e), "success": False})
             except Exception as e:
-                tool_results.append(
-                    {"type": "error", "display": f"\n❌ **Tool Error:** {str(e)}\n"}
-                )
+                error_msg = f"\n❌ **Tool Error:** {str(e)}\n"
+                yield error_msg
+                tool_results.append({"type": "error", "error": str(e), "success": False})
 
-        # Now yield the tool results
-        if tool_results:
-            # Show all tool results
-            for tool_result in tool_results:
-                yield tool_result["display"]
+        # Tool results have already been yielded immediately during execution
+        # Now check if we should continue or end
+        
+        # Check if we should end the response (end_response tool was called)
+        if should_end_response:
+            return
 
-            # Check if we should end the response (end_response tool was called)
-            if should_end_response:
-                return
-
-            # Use auto-continuation manager to determine if we should continue
-            if self.auto_continuation.should_continue(tool_results, should_end_response) and recursion_depth < MAX_RECURSION_DEPTH:
+        # Use auto-continuation manager to determine if we should continue
+        if has_executed_tools and self.auto_continuation.should_continue(tool_results, should_end_response) and recursion_depth < MAX_RECURSION_DEPTH:
                 # Show continuation indicator
                 yield "\n🔄 **Auto-continuing...**\n"
                 
@@ -1389,7 +1621,11 @@ CRITICAL BEHAVIOR REQUIREMENTS:
 - PROVIDE COMPREHENSIVE SOLUTIONS: Don't stop after creating just one file - complete the entire functional project.
 - BE PROACTIVE: Anticipate what files and functionality are needed and create them all without asking for permission for each step.
 - EXPLORATION IS OPTIONAL: You may explore the workspace with 'ls' or 'pwd' if needed, but this is NOT required before creating new files. If the user asks you to BUILD or CREATE something, prioritize creating the files immediately.
-- ALWAYS USE end_response TOOL: When you have completed ALL tasks, ALWAYS call the end_response tool to prevent unnecessary continuation
+- ALWAYS USE end_response TOOL: When you have completed ALL tasks, you MUST call the end_response tool to signal completion. This prevents unnecessary auto-continuation.
+- AUTO-CONTINUATION: The system will automatically continue ONLY when:
+  * You created files but haven't run necessary commands yet (e.g., npm install after creating package.json)
+  * There were errors that need to be handled
+  * Otherwise, you MUST explicitly call end_response when done
 - NEVER RE-READ SAME FILE: If a file was truncated in the output, use read_file_lines to read the specific truncated section, DO NOT re-read the entire file
 
 WORKSPACE EXPLORATION RULES (CRITICAL - ALWAYS CHECK FIRST):
@@ -1569,7 +1805,7 @@ For multiple files, use separate tool calls:
 }
 ```
 
-For commands (always explore first):
+For commands:
 
 ```json
 {
@@ -1580,16 +1816,44 @@ For commands (always explore first):
 }
 ```
 
+For LONG commands (npm install, servers), use run_async_command to run in background:
+
 ```json
 {
   "tool_code": "command_runner",
   "args": {
-    "command": "pwd"
+    "operation": "run_async_command",
+    "command": "npm install"
   }
 }
 ```
 
-For web search (when you need external information):
+For file reading and grep:
+
+```json
+{
+  "tool_code": "file_reader",
+  "args": {
+    "operation": "read_file",
+    "file_path": "src/App.js"
+  }
+}
+```
+
+```json
+{
+  "tool_code": "file_reader",
+  "args": {
+    "operation": "grep_search",
+    "pattern": "function.*Component",
+    "search_path": "src",
+    "file_pattern": "*.js",
+    "recursive": true
+  }
+}
+```
+
+For web search:
 
 ```json
 {
@@ -1672,11 +1936,11 @@ When user explicitly asks for RESEARCH:
 The tools will execute automatically and show results. Keep explanatory text BRIEF.
 
 Available tools:
-- file_operations: Create, read, write, delete files and directories
-- command_runner: Execute shell commands
+- file_operations: Create, read, write, delete files
+- file_reader: Read files, grep search, list directories  
+- command_runner: Execute shell commands (use run_async_command for long tasks)
 - web_search: Search the web for information
-- code_analysis: Analyze code files
-- response_control: Control response continuation (use end_response to stop auto-continuation)
+- response_control: Use end_response when task is complete
 
 RESPONSE CONTINUATION (CRITICAL - ALWAYS USE end_response):
 - By default, after executing tools, the AI will automatically continue to complete the task

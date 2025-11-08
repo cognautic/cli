@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cognautic-cli"
-version = "1.1.1"
+version = "1.1.2"
 description = "A Python-based CLI AI coding agent that provides agentic development capabilities with multi-provider AI support and real-time interaction"
 readme = "README.md"
 license = {text = "Proprietary - All Rights Reserved"}
 authors = [
-    {name = "cognautic", email = "cognautic@gmail.com"}
+    {name = "Cognautic", email = "cognautic@gmail.com"}
 ]
 maintainers = [
-    {name = "cognautic", email = "cognautic@gmail.com"}
+    {name = "Cognautic", email = "cognautic@gmail.com"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -46,6 +46,7 @@ dependencies = [
     "google-generativeai>=0.3.0",
     "together>=0.2.0",
     "nest-asyncio>=1.5.0",
+    "prompt-toolkit>=3.0.0",
 ]
 
 [project.optional-dependencies]
