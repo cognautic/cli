@@ -16,7 +16,7 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 
 | Property | Value |
 |----------|-------|
-| **Developer** | Cognautic Team |
+| **Developer** | Cognautic |
 | **Written in** | Python |
 | **Operating system** | Cross-platform |
 | **Type** | AI Development Tool |
