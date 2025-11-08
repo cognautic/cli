@@ -16,7 +16,7 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 
 | Property | Value |
 |----------|-------|
-| **Developer** | Cognautic Team |
+| **Developer** | Cognautic |
 | **Written in** | Python |
 | **Operating system** | Cross-platform |
 | **Type** | AI Development Tool |
@@ -30,6 +30,7 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 - **Multi-Provider AI Support**: Integrate with OpenAI, Anthropic, Google, Together AI, OpenRouter, and 15+ other AI providers
 - **Local Model Support**: Run free open-source Hugging Face models locally without API keys (NEW! 🎉)
 - **Agentic Tools**: File operations, command execution, web search, and code analysis
+- **Intelligent Web Search**: Automatically searches the web when implementing features requiring current/external information (NEW! 🔍)
 - **Real-time Communication**: WebSocket server for live AI responses and tool execution
 - **Secure Configuration**: Encrypted API key storage and permission management
 - **Interactive CLI**: Rich terminal interface with progress indicators, colored output, and command history
@@ -102,7 +103,7 @@ pipx upgrade cognautic-cli
 pipx install cognautic_cli-y.y.y-py3-none-any.whl --force
 ```
 
-_**Note:** Replace `y.y.y` and `z.z.z` with actual version numbers (e.g., 1.2.0, 2.1.5)._
+_**Note:** Replace `y.y.y` and `z.z.z` with actual version numbers (e.g., 1.0.0, 1.1.0)._
 
 ### Uninstallation
 
@@ -272,12 +273,50 @@ cognautic chat
 - `mistralai/Mistral-7B-Instruct-v0.2` - Excellent performance (7B)
 
 **Benefits:**
-- Complete privacy - no data sent externally
-- No API costs
-- Works offline
-- Full control over model behavior
+- ✅ Complete privacy - no data sent externally
+- ✅ No API costs
+- ✅ Works offline
+- ✅ Full control over model behavior
 
 📖 **[Read the full Local Models Guide →](LOCAL_MODELS.md)**
+
+---
+
+## Intelligent Web Search (NEW! 🔍)
+
+Cognautic CLI now features **intelligent web search** that automatically researches information when needed. The AI will search the web when:
+
+- **Implementing APIs**: "Implement Stripe payment integration"
+- **Using Latest Libraries**: "Create a React app with TailwindCSS"
+- **Research Requests**: "What's the best way to implement real-time chat?"
+- **Current Best Practices**: "Build a modern authentication system"
+
+### Example Usage
+
+```bash
+You: Implement OpenAI API in my Python project
+
+AI: 🔍 Searching for latest OpenAI API documentation...
+    ✅ Found: OpenAI API Reference
+    📝 Creating implementation with current best practices...
+    
+    [Creates files with up-to-date API usage]
+```
+
+### When Web Search is Used
+
+✅ **Automatically triggered for:**
+- Latest API documentation
+- Current framework/library versions
+- Modern best practices
+- Technologies requiring external information
+
+❌ **Not used for:**
+- Basic programming concepts
+- Simple file operations
+- General coding tasks
+
+📖 **[Read the full Web Search Guide →](docs/WEB_SEARCH_TOOL.md)** | **[Quick Reference →](docs/WEB_SEARCH_QUICK_REFERENCE.md)**
 
 ---
 
@@ -339,11 +378,11 @@ cognautic chat --provider openai --model gpt-4o-mini --websocket-port 8765
 
 ### Key Features
 
-- **Real-time Streaming**: AI responses stream chunk-by-chunk as they're generated
-- **Bi-directional**: Full duplex WebSocket communication
-- **Session Management**: Automatic session creation and context preservation
-- **Multi-provider**: Works with all supported AI providers
-- **Tool Execution**: Execute tools and file operations via WebSocket
+- ✨ **Real-time Streaming**: AI responses stream chunk-by-chunk as they're generated
+- 🔄 **Bi-directional**: Full duplex WebSocket communication
+- 🔐 **Session Management**: Automatic session creation and context preservation
+- 🤖 **Multi-provider**: Works with all supported AI providers
+- 🛠️ **Tool Execution**: Execute tools and file operations via WebSocket
 
 ### Client Examples
 
@@ -495,4 +534,5 @@ You: /model claude-3-sonnet-20240229
 ---
 
 ## License
+
 MIT
