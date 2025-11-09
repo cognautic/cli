@@ -5,7 +5,7 @@ All notable changes to Cognautic CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.3] - 2025-11-09
+## [1.1.3] - 2025-11-08
 
 ### Fixed
 
@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Solution**: Now properly adds continuation prompt to messages before recursive streaming
   - **Impact**: Auto-continuation now works correctly after exploratory commands (ls, pwd, etc.)
 
-#### 🖥️ Terminal Mode Improvements
+#### > Terminal Mode Improvements
 - **Live Command Output**: Terminal mode now shows command output in real-time as it's generated
   - Changed from `subprocess.run()` with buffered output to `subprocess.Popen()` with streaming
   - Line-by-line output display for better user experience
@@ -111,5 +111,4 @@ added 1432 packages in 45s
   - All borders now align perfectly at 65 character width
 
 ---
-
 
