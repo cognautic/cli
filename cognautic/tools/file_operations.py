@@ -131,6 +131,12 @@ class FileOperationsTool(BaseTool):
         path = Path(file_path)
         existed_before = path.exists()
         
+        # Get old content if file exists
+        old_content = None
+        if path.exists() and not append:
+            with open(path, 'r', encoding=encoding) as f:
+                old_content = f.read()
+
         if create_dirs:
             path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -145,7 +151,9 @@ class FileOperationsTool(BaseTool):
         return {
             'file_path': str(path),
             'size': path.stat().st_size,
-            'created': not existed_before
+            'created': not existed_before,
+            'old_content': old_content,
+            'new_content': content if not append else old_content + content if old_content else content
         }
     
     async def _write_file_lines(
@@ -163,12 +171,14 @@ class FileOperationsTool(BaseTool):
         if create_dirs:
             path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Read existing file if it exists
+        # Read existing file if it exists to capture old content
         if path.exists():
             with open(path, 'r', encoding=encoding) as f:
                 all_lines = f.readlines()
+            old_content = ''.join(all_lines)
         else:
             all_lines = []
+            old_content = None
         
         total_lines = len(all_lines)
         
@@ -209,12 +219,16 @@ class FileOperationsTool(BaseTool):
         with open(path, 'w', encoding=encoding) as f:
             f.writelines(all_lines)
         
+        new_file_content = ''.join(all_lines)
+        
         return {
             'file_path': str(path),
             'start_line': start_line,
             'end_line': start_line + len(new_lines) - 1,
             'lines_written': len(new_lines),
-            'total_lines': len(all_lines)
+            'total_lines': len(all_lines),
+            'old_content': old_content,
+            'new_content': new_file_content
         }
     
     async def _create_file(self, file_path: str, content: str = "", encoding: str = 'utf-8') -> Dict[str, Any]:

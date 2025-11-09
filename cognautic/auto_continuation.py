@@ -19,10 +19,12 @@ class AutoContinuationManager:
         """
         self.max_iterations = max_iterations
         self.iteration_count = 0
+        self.previous_tool_types = []  # Track previous tool types to detect repetitions
         
     def reset(self):
         """Reset iteration counter for new conversation turn"""
         self.iteration_count = 0
+        self.previous_tool_types = []
     
     def should_continue(self, tool_results: List[Dict[str, Any]], has_end_response: bool) -> bool:
         """
@@ -51,12 +53,16 @@ class AutoContinuationManager:
         has_errors = any(r.get('type') == 'error' for r in tool_results)
         
         # Check what types of tools were executed
-        has_file_ops = any(r.get('type') in ['file_op', 'file_write', 'file_read'] for r in tool_results)
+        has_file_ops = any(r.get('type') in ['file_op', 'file_write'] for r in tool_results)  # Exclude file_read from has_file_ops
+        has_file_read = any(r.get('type') in ['file_read', 'file_reader'] for r in tool_results)  # Include both file reading types
         has_commands = any(r.get('type') == 'command' for r in tool_results)
         has_background_commands = any(
             r.get('type') == 'command' and 'background' in str(r.get('command', ''))
             for r in tool_results
         )
+        
+        # Check for web searches (which might indicate looking for information before proceeding)
+        has_web_search = any(r.get('type') in ['web_search', 'web_fetch'] for r in tool_results)
         
         # Check if commands were exploratory (ls, pwd, dir, etc.)
         exploratory_commands = ['ls', 'pwd', 'dir', 'cd', 'find', 'tree', 'cat', 'head', 'tail']
@@ -66,35 +72,66 @@ class AutoContinuationManager:
             for r in tool_results
         )
         
+        # Track current tool types for repetition detection
+        current_tool_types = []
+        for result in tool_results:
+            tool_type = result.get('type', 'unknown')
+            current_tool_types.append(tool_type)
+        
+        # Check for repeated operations of the same type (especially web searches)
+        is_repeating_search = (
+            has_web_search and 
+            self.previous_tool_types and 
+            all('web_search' in prev_type or 'web_fetch' in prev_type for prev_type in self.previous_tool_types[-3:])
+        )
+        
+        # Store current types for next check (keep last 5 to detect patterns)
+        self.previous_tool_types.extend(current_tool_types)
+        self.previous_tool_types = self.previous_tool_types[-5:]  # Keep only last 5
+        
         # Smart continuation logic:
         # 1. If there are errors, continue to let AI handle them
         if has_errors:
             self.iteration_count += 1
             return True
+
+        # 2. If file was read, always continue so AI can act on the content
+        if has_file_read:
+            self.iteration_count += 1
+            return True
         
-        # 2. If only file operations were done, likely need to run commands next
+        # 3. If repeating the same operation (like web searches), don't continue to break the loop
+        if is_repeating_search and self.iteration_count > 3:
+            return False  # Break the loop if repeating searches for more than 3 iterations
+        
+        # 4. If only file operations were done, likely need to run commands next
         if has_file_ops and not has_commands:
             self.iteration_count += 1
             return True
         
-        # 3. If only exploratory commands (ls, pwd, etc.), continue to do actual work
-        if has_exploratory_commands and not has_file_ops:
+        # 5. If only exploratory commands (ls, pwd, etc.), continue to do actual work
+        if has_exploratory_commands and not (has_file_ops or has_file_read):
             self.iteration_count += 1
             return True
         
-        # 4. If background commands were started AND files created, task likely complete
-        if has_background_commands and has_file_ops:
+        # 6. If web search was performed, often AI should continue to create files/execute commands with the information
+        if has_web_search and not has_file_ops:
+            self.iteration_count += 1
+            return True
+        
+        # 7. If background commands were started AND files created, task likely complete
+        if has_background_commands and (has_file_ops or has_file_read):
             return False
         
-        # 5. If only background commands (no files), don't continue (they're running)
-        if has_background_commands and not has_file_ops:
+        # 8. If only background commands (no files), don't continue (they're running)
+        if has_background_commands and not (has_file_ops or has_file_read):
             return False
         
-        # 6. If regular commands executed with file ops, task likely complete
+        # 9. If regular commands executed with file ops, task likely complete
         if has_commands and has_file_ops and not has_exploratory_commands:
             return False
         
-        # 7. Default: Continue if we're early in the process
+        # 10. Default: Continue if we're early in the process
         # This ensures AI completes the full task
         if self.iteration_count < 3:
             self.iteration_count += 1
@@ -150,13 +187,13 @@ class AutoContinuationManager:
 
 {context}
 
-Continue with the next steps:
-1. If you need to create files, create them now with the information from the search
-2. If you need to run commands, execute them now
-3. Continue until the task is FULLY complete
-4. When EVERYTHING is done, call the end_response tool
+Now CREATE the files you researched. You have the information you need, so:
+1. Create all necessary files for the application
+2. Write complete, functional code based on what you found
+3. When you have created all files, call the end_response tool
+4. DO NOT search again unless absolutely necessary
 
-Continue now:"""
+Create the files now:"""
         
         elif has_file_ops and not has_commands:
             return f"""Files have been created/modified:

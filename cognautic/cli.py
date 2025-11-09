@@ -87,7 +87,7 @@ def signal_handler(signum, frame):
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.1.2", prog_name="Cognautic CLI")
+@click.version_option(version="1.1.3", prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -109,9 +109,9 @@ def setup(provider, api_key, interactive):
         config_manager.interactive_setup()
     elif provider and api_key:
         config_manager.set_api_key(provider, api_key)
-        console.print(f"✅ API key for {provider} configured successfully", style="green")
+        console.print(f"SUCCESS: API key for {provider} configured successfully", style="green")
     else:
-        console.print("❌ Please provide --provider and --api-key, or use --interactive", style="red")
+        console.print("ERROR: Please provide --provider and --api-key, or use --interactive", style="red")
 
 @main.command()
 @click.option('--provider', help='AI provider to use')
@@ -151,7 +151,7 @@ def chat(provider, model, project_path, websocket_port, session):
         config_manager.interactive_setup()
         available_providers = config_manager.list_providers()
         if not available_providers:
-            console.print("❌ Setup cancelled. Cannot start chat without API keys.", style="red")
+            console.print("ERROR: Setup cancelled. Cannot start chat without API keys.", style="red")
             return
     
     # Handle session loading
@@ -172,7 +172,7 @@ def chat(provider, model, project_path, websocket_port, session):
         provider = config_manager.get_config_value('last_provider') or config_manager.get_config_value('default_provider') or available_providers[0]
     
     if not config_manager.has_api_key(provider):
-        console.print(f"❌ No API key found for {provider}. Available providers: {', '.join(available_providers)}", style="red")
+        console.print(f"ERROR: No API key found for {provider}. Available providers: {', '.join(available_providers)}", style="red")
         return
     
     # Load saved model for the provider if no model was specified
@@ -196,15 +196,15 @@ def chat(provider, model, project_path, websocket_port, session):
         server_task = asyncio.create_task(websocket_server.start())
         
         try:
-            console.print("💡 Type '/help' for commands, 'exit' to quit")
-            console.print("💡 Press Shift+Tab to toggle Terminal mode")
+            console.print("INFO: Type '/help' for commands, 'exit' to quit")
+            console.print("INFO: Press Shift+Tab to toggle Terminal mode")
             if project_path:
-                console.print(f"📁 Working in: {project_path}")
+                console.print(f"DIR: Working in: {project_path}")
             
             # Only show session info if continuing an existing session
             if memory_manager.get_current_session():
                 current_session = memory_manager.get_current_session()
-                console.print(f"📝 Continuing session: {current_session.session_id} - {current_session.title}")
+                console.print(f"SESSION: Continuing session: {current_session.session_id} - {current_session.title}")
                 # Show recent conversation history
                 history = memory_manager.get_conversation_history(limit=3)
                 if history:
@@ -241,7 +241,7 @@ def chat(provider, model, project_path, websocket_port, session):
             readline.set_history_length(1000)
             
             # Show current workspace
-            console.print(f"📁 Workspace: {current_workspace}")
+            console.print(f"DIR: Workspace: {current_workspace}")
             
             # Terminal mode state
             terminal_mode = [False]  # Use list to make it mutable in nested function
@@ -252,7 +252,7 @@ def chat(provider, model, project_path, websocket_port, session):
             @bindings.add('s-tab')  # Shift+Tab
             def toggle_mode(event):
                 terminal_mode[0] = not terminal_mode[0]
-                mode_name = "🖥️  Terminal" if terminal_mode[0] else "💬 Chat"
+                mode_name = ">  Terminal" if terminal_mode[0] else " Chat"
                 # Clear current line and show mode switch message
                 event.app.current_buffer.text = ''
                 event.app.exit(result='__MODE_TOGGLE__')
@@ -260,20 +260,20 @@ def chat(provider, model, project_path, websocket_port, session):
             # Create prompt session
             session = PromptSession(key_bindings=bindings)
             
-            console.print("[dim]💡 Press Shift+Tab to toggle between Chat and Terminal modes[/dim]\n")
+            console.print("[dim]INFO: Press Shift+Tab to toggle between Chat and Terminal modes[/dim]\n")
             
             while True:
                 try:
                     # Show current workspace and mode in prompt
                     workspace_info = f" [{Path(current_workspace).name}]" if current_workspace else ""
-                    mode_indicator = "🖥️ " if terminal_mode[0] else ""
+                    mode_indicator = "> " if terminal_mode[0] else ""
                     
                     prompt_text = HTML(f'<ansibrightcyan><b>{mode_indicator}You{workspace_info}:</b></ansibrightcyan> ')
                     user_input = await session.prompt_async(prompt_text)
                     
                     # Handle mode toggle
                     if user_input == '__MODE_TOGGLE__':
-                        mode_name = "🖥️  Terminal" if terminal_mode[0] else "💬 Chat"
+                        mode_name = ">  Terminal" if terminal_mode[0] else ">  Chat"
                         console.print(f"[bold yellow]Switched to {mode_name} mode[/bold yellow]")
                         console.print("[dim]Press Shift+Tab to toggle modes[/dim]")
                         continue
@@ -286,33 +286,68 @@ def chat(provider, model, project_path, websocket_port, session):
                         if not user_input.strip():
                             continue
                         
-                        # Execute command in terminal mode
+                        # Execute command in terminal mode with live output
                         try:
-                            # Change to current workspace directory
-                            original_dir = os.getcwd()
-                            os.chdir(current_workspace)
-                            
-                            # Run command and capture output
-                            result = subprocess.run(
+                            # Run command with live output streaming
+                            process = subprocess.Popen(
                                 user_input,
                                 shell=True,
-                                capture_output=True,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
                                 text=True,
-                                cwd=current_workspace
+                                cwd=current_workspace,
+                                bufsize=1,  # Line buffered
+                                universal_newlines=True
                             )
                             
-                            # Show output
-                            if result.stdout:
-                                console.print(result.stdout, end='')
-                            if result.stderr:
-                                console.print(f"[red]{result.stderr}[/red]", end='')
+                            # Stream output in real-time
+                            import select
+                            import time
                             
-                            # Show exit code if non-zero
-                            if result.returncode != 0:
-                                console.print(f"[yellow]Exit code: {result.returncode}[/yellow]")
-                            
-                            # Change back to original directory
-                            os.chdir(original_dir)
+                            try:
+                                while True:
+                                    # Check if process has finished
+                                    if process.poll() is not None:
+                                        # Read any remaining output
+                                        remaining_stdout = process.stdout.read()
+                                        remaining_stderr = process.stderr.read()
+                                        if remaining_stdout:
+                                            console.print(remaining_stdout, end='')
+                                        if remaining_stderr:
+                                            console.print(f"[red]{remaining_stderr}[/red]", end='')
+                                        break
+                                    
+                                    # Read stdout
+                                    stdout_line = process.stdout.readline()
+                                    if stdout_line:
+                                        console.print(stdout_line, end='')
+                                    
+                                    # Read stderr
+                                    stderr_line = process.stderr.readline()
+                                    if stderr_line:
+                                        console.print(f"[red]{stderr_line}[/red]", end='')
+                                    
+                                    # Small sleep to prevent busy waiting
+                                    if not stdout_line and not stderr_line:
+                                        time.sleep(0.01)
+                                
+                                # Wait for process to complete
+                                returncode = process.wait()
+                                
+                                # Show exit code if non-zero
+                                if returncode != 0:
+                                    console.print(f"[yellow]Exit code: {returncode}[/yellow]")
+                                    
+                            except KeyboardInterrupt:
+                                # Handle Ctrl+C - terminate the process
+                                console.print("\n[yellow]^C[/yellow]")
+                                process.terminate()
+                                try:
+                                    process.wait(timeout=2)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()
+                                    process.wait()
+                                console.print("[yellow]Process terminated[/yellow]")
                             
                         except Exception as e:
                             console.print(f"[red]Error executing command: {str(e)}[/red]")
@@ -380,7 +415,8 @@ def chat(provider, model, project_path, websocket_port, session):
                     }
                     typing_delay = speed_map.get(typing_speed, 0.001) if isinstance(typing_speed, str) else float(typing_speed)
                     
-                    # Stream the response character by character
+                    # Add border before AI response
+                    console.print("[bold magenta]─[/bold magenta]" * 50)
                     console.print("[bold magenta]AI:[/bold magenta] ", end="")
                     full_response = ""
                     response_stopped = False
@@ -419,6 +455,7 @@ def chat(provider, model, project_path, websocket_port, session):
                         break
                     
                     console.print()  # New line after streaming
+                    console.print("[bold magenta]─[/bold magenta]" * 50)  # Border after AI response
                     
                     # Add AI response to memory (even if stopped)
                     if full_response:
@@ -430,7 +467,7 @@ def chat(provider, model, project_path, websocket_port, session):
                     # Ctrl+C pressed while waiting for user input - exit chat
                     break
                 except Exception as e:
-                    console.print(f"❌ Error: {str(e)}", style="red")
+                    console.print(f"ERROR: {str(e)}", style="red")
         
         finally:
             # Save command history
@@ -440,7 +477,7 @@ def chat(provider, model, project_path, websocket_port, session):
                 pass
             
             server_task.cancel()
-            console.print("👋 Chat session ended")
+            console.print("Chat session ended")
     
     asyncio.run(run_chat())
 
@@ -458,18 +495,18 @@ def config(action, key, value):
         console.print_json(data=config_data)
     elif action == 'set' and key and value:
         config_manager.set_config(key, value)
-        console.print(f"✅ Set {key} = {value}", style="green")
+        console.print(f"SUCCESS: Set {key} = {value}", style="green")
     elif action == 'get' and key:
         value = config_manager.get_config_value(key)
         console.print(f"{key} = {value}")
     elif action == 'delete' and key:
         config_manager.delete_config(key)
-        console.print(f"✅ Deleted {key}", style="green")
+        console.print(f"SUCCESS: Deleted {key}", style="green")
     elif action == 'reset':
         config_manager.reset_config()
-        console.print("✅ Configuration reset to defaults", style="green")
+        console.print("SUCCESS: Configuration reset to defaults", style="green")
     else:
-        console.print("❌ Invalid config action. Use: list, set <key> <value>, get <key>, delete <key>, reset", style="red")
+        console.print("ERROR: Invalid config action. Use: list, set <key> <value>, get <key>, delete <key>, reset", style="red")
 
 @main.command()
 def providers():
@@ -525,7 +562,7 @@ def rules(action, rule_type, args, workspace):
     if not action:
         # Display all rules
         rules_manager.display_rules(workspace)
-        console.print("\n💡 Usage:")
+        console.print("\nINFO: Usage:")
         console.print("  cognautic rules add global <rule> [description]")
         console.print("  cognautic rules add workspace <rule> [description] -w <path>")
         console.print("  cognautic rules remove global <index>")
@@ -536,7 +573,7 @@ def rules(action, rule_type, args, workspace):
     
     if action == "add":
         if not rule_type or not args:
-            console.print("❌ Usage: cognautic rules add <global|workspace> <rule> [description]", style="red")
+            console.print("ERROR: Usage: cognautic rules add <global|workspace> <rule> [description]", style="red")
             return
         
         # Join all args as the rule text
@@ -549,11 +586,11 @@ def rules(action, rule_type, args, workspace):
                 workspace = os.getcwd()
             rules_manager.add_workspace_rule(rule_text, workspace_path=workspace)
         else:
-            console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+            console.print("ERROR: Rule type must be 'global' or 'workspace'", style="red")
     
     elif action == "remove":
         if not rule_type or not args:
-            console.print("❌ Usage: cognautic rules remove <global|workspace> <index>", style="red")
+            console.print("ERROR: Usage: cognautic rules remove <global|workspace> <index>", style="red")
             return
         
         try:
@@ -567,7 +604,7 @@ def rules(action, rule_type, args, workspace):
             else:
                 console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
         except (ValueError, IndexError):
-            console.print("❌ Index must be a valid number", style="red")
+            console.print("ERROR: Index must be a valid number", style="red")
     
     elif action == "clear":
         if not rule_type:
@@ -581,7 +618,7 @@ def rules(action, rule_type, args, workspace):
                 workspace = os.getcwd()
             rules_manager.clear_workspace_rules(workspace)
         else:
-            console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+            console.print("ERROR: Rule type must be 'global' or 'workspace'", style="red")
     
     else:
         console.print(f"❌ Unknown action: {action}", style="red")
@@ -600,9 +637,9 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         if len(parts) < 2:
             current = context.get('current_workspace')
             if current:
-                console.print(f"📁 Current workspace: {current}")
+                console.print(f"DIR: Current workspace: {current}")
             else:
-                console.print("📁 No workspace set")
+                console.print("DIR: No workspace set")
             console.print("Usage: /workspace <path> or /ws <path>")
         else:
             path_input = parts[1]
@@ -621,10 +658,10 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             
             if new_path.exists() and new_path.is_dir():
                 context['current_workspace'] = str(new_path)
-                console.print(f"✅ Workspace changed to: {new_path}")
-                console.print(f"💡 AI will now create files in this directory")
+                console.print(f"SUCCESS: Workspace changed to: {new_path}")
+                console.print(f"INFO: AI will now create files in this directory")
             else:
-                console.print(f"❌ Directory not found: {new_path}", style="red")
+                console.print(f"ERROR: Directory not found: {new_path}", style="red")
         return True
     
     elif cmd == "setup":
@@ -646,7 +683,7 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             console.print(f"Available providers: {', '.join(providers) if providers else 'None'}")
         elif parts[1] == "set" and len(parts) >= 4:
             config_manager.set_config(parts[2], parts[3])
-            console.print(f"✅ Set {parts[2]} = {parts[3]}")
+            console.print(f"SUCCESS: Set {parts[2]} = {parts[3]}")
         return True
     
     elif cmd == "provider":
@@ -669,11 +706,11 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     # Load the local model if not already loaded
                     if 'local' not in ai_engine.providers:
                         try:
-                            console.print(f"🔄 Loading local model from: {local_model_path}")
+                            console.print(f"INFO: Loading local model from: {local_model_path}")
                             ai_engine.load_local_model(local_model_path)
-                            console.print("✅ Local model loaded successfully!")
+                            console.print("SUCCESS: Local model loaded successfully!")
                         except Exception as e:
-                            console.print(f"❌ Error loading local model: {e}", style="red")
+                            console.print(f"ERROR: Error loading local model: {e}", style="red")
                             return True
                     
                     context['provider'] = new_provider
@@ -684,12 +721,12 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     saved_model = config_manager.get_provider_model(new_provider)
                     context['model'] = saved_model
                     current_model = saved_model  # Update current model
-                    console.print(f"✅ Switched to provider: {new_provider}")
+                    console.print(f"SUCCESS: Switched to provider: {new_provider}")
                     if saved_model:
-                        console.print(f"📌 Using saved model: {saved_model}")
+                        console.print(f"INFO: Using saved model: {saved_model}")
                 else:
-                    console.print("❌ No local model configured", style="red")
-                    console.print("💡 Use /lmodel <path> to load a local model first", style="yellow")
+                    console.print("ERROR: No local model configured", style="red")
+                    console.print("INFO: Use /lmodel <path> to load a local model first", style="yellow")
             elif config_manager.has_api_key(new_provider):
                 context['provider'] = new_provider
                 current_provider = new_provider  # Update current provider
@@ -699,24 +736,24 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 saved_model = config_manager.get_provider_model(new_provider)
                 context['model'] = saved_model
                 current_model = saved_model  # Update current model
-                console.print(f"✅ Switched to provider: {new_provider}")
+                console.print(f"SUCCESS: Switched to provider: {new_provider}")
                 if saved_model:
-                    console.print(f"📌 Using saved model: {saved_model}")
+                    console.print(f"INFO: Using saved model: {saved_model}")
             else:
-                console.print(f"❌ Provider {new_provider} not configured", style="red")
+                console.print(f"ERROR: Provider {new_provider} not configured", style="red")
                 if new_provider == 'local':
-                    console.print("💡 Use /lmodel <path> to load a local model first", style="yellow")
+                    console.print("INFO: Use /lmodel <path> to load a local model first", style="yellow")
         return True
     
     elif cmd == "model" or cmd == "models":
         current_provider = context.get('provider')
         if not current_provider:
-            console.print("❌ No provider selected", style="red")
+            console.print("ERROR: No provider selected", style="red")
             return True
         
         # Check if user wants to list models (fetch from API)
         if len(parts) >= 2 and parts[1] == "list":
-            console.print(f"🔍 Fetching available models from {current_provider}...")
+            console.print(f"INFO: Fetching available models from {current_provider}...")
             
             try:
                 # Import API client
@@ -727,8 +764,8 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 api_key = config_manager.get_api_key(current_provider)
                 
                 if not api_key:
-                    console.print(f"❌ No API key configured for {current_provider}", style="red")
-                    console.print(f"💡 Run /setup to configure your API key")
+                    console.print(f"ERROR: No API key configured for {current_provider}", style="red")
+                    console.print(f"INFO: Run /setup to configure your API key")
                     return True
                 
                 # Create API client and fetch models
@@ -737,8 +774,8 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 # Check if provider has models endpoint
                 provider_config = get_provider_config(current_provider)
                 if 'models_endpoint' not in provider_config:
-                    console.print(f"ℹ️  {current_provider} doesn't provide a models API endpoint")
-                    console.print(f"💡 Check the provider's documentation for available models:")
+                    console.print(f"INFO: {current_provider} doesn't provide a models API endpoint")
+                    console.print(f"INFO: Check the provider's documentation for available models:")
                     
                     # Show documentation links
                     docs = {
@@ -789,7 +826,7 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     if len(models) > 20:
                         console.print(f"\n... and {len(models) - 20} more models")
                     
-                    console.print(f"\n💡 Use: /model <model_name> to switch")
+                    console.print(f"\nINFO: Use: /model <model_name> to switch")
                 elif 'models' in result:
                     models = result['models']
                     console.print(f"\n[bold cyan]Available models for {current_provider}:[/bold cyan]")
@@ -800,22 +837,22 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     if len(models) > 20:
                         console.print(f"\n... and {len(models) - 20} more models")
                     
-                    console.print(f"\n💡 Use: /model <model_name> to switch")
+                    console.print(f"\nINFO: Use: /model <model_name> to switch")
                 else:
-                    console.print(f"⚠️  Unexpected response format from {current_provider}")
-                    console.print(f"💡 Check the provider's documentation for available models")
+                    console.print(f"WARNING: Unexpected response format from {current_provider}")
+                    console.print(f"INFO: Check the provider's documentation for available models")
                     
             except Exception as e:
-                console.print(f"❌ Error fetching models: {str(e)}", style="red")
-                console.print(f"💡 Check the provider's documentation for available models")
+                console.print(f"ERROR: Error fetching models: {str(e)}", style="red")
+                console.print(f"INFO: Check the provider's documentation for available models")
         
         elif len(parts) < 2:
             # Show current model and hint
             current_model = context.get('model')
             console.print(f"📌 Current model: {current_model or 'default'}")
             console.print(f"📌 Provider: {current_provider}")
-            console.print(f"\n💡 Use: /model list - to fetch available models from API")
-            console.print(f"💡 Use: /model <model_name> - to switch model")
+            console.print(f"\nINFO: Use: /model list - to fetch available models from API")
+            console.print(f"INFO: Use: /model <model_name> - to switch model")
         else:
             # Switch to new model
             new_model = parts[1]
@@ -830,32 +867,32 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 # Save as default for this provider
                 if current_provider:
                     config_manager.set_provider_model(current_provider, new_model)
-                    console.print(f"✅ Switched to model: {new_model}")
-                    console.print(f"💾 Model saved as default for provider: {current_provider}")
+                    console.print(f"SUCCESS: Switched to model: {new_model}")
+                    console.print(f"INFO: Model saved as default for provider: {current_provider}")
                 else:
-                    console.print(f"✅ Switched to model: {new_model}")
+                    console.print(f"SUCCESS: Switched to model: {new_model}")
             else:
-                console.print(f"✅ Switched to model: {new_model}")
+                console.print(f"SUCCESS: Switched to model: {new_model}")
         return True
     
     elif cmd == "session":
         memory_manager = context.get('memory_manager')
         if not memory_manager:
-            console.print("❌ Memory manager not available", style="red")
+            console.print("ERROR: Memory manager not available", style="red")
             return True
         
         if len(parts) < 2:
             # Show current session info and list available sessions
             current_session = memory_manager.get_current_session()
             if current_session:
-                console.print(f"📝 Current session: {current_session.session_id} - {current_session.title}")
+                console.print(f"SESSION: Current session: {current_session.session_id} - {current_session.title}")
                 console.print(f"   Created: {current_session.created_at}")
                 console.print(f"   Messages: {current_session.message_count}")
                 console.print(f"   Provider: {current_session.provider}")
                 if current_session.model:
                     console.print(f"   Model: {current_session.model}")
             else:
-                console.print("📝 No active session")
+                console.print("SESSION: No active session")
             
             console.print("\nAvailable commands:")
             console.print("• /session list - List all sessions")
@@ -868,11 +905,11 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         elif parts[1] == "list":
             sessions = memory_manager.list_sessions()
             if not sessions:
-                console.print("📝 No sessions found")
+                console.print("SESSION: No sessions found")
             else:
-                console.print(f"📝 Found {len(sessions)} sessions:")
-                for session in sessions[:10]:  # Show last 10 sessions
-                    console.print(f"   {session.session_id} - {session.title}")
+                console.print(f"SESSION: Found {len(sessions)} sessions:")
+                for idx, session in enumerate(sessions[:10], 1):  # Show last 10 sessions with index
+                    console.print(f"   [{idx}] {session.session_id} - {session.title}")
                     console.print(f"      {session.message_count} messages, {session.provider}")
                     console.print(f"      Last updated: {session.last_updated}")
                     console.print()
@@ -890,7 +927,20 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             )
         
         elif parts[1] == "load" and len(parts) >= 3:
-            session_id = parts[2]
+            session_identifier = parts[2]
+            
+            # Check if it's a numeric index
+            if session_identifier.isdigit():
+                index = int(session_identifier)
+                sessions = memory_manager.list_sessions()
+                if 1 <= index <= len(sessions):
+                    session_id = sessions[index - 1].session_id
+                else:
+                    console.print(f"[red]Invalid session index: {index}. Use /session list to see available sessions.[/red]")
+                    return True
+            else:
+                session_id = session_identifier
+            
             if memory_manager.load_session(session_id):
                 # Update context with session info
                 current_session = memory_manager.get_current_session()
@@ -910,10 +960,10 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         elif parts[1] == "title" and len(parts) >= 3:
             new_title = " ".join(parts[2:])
             memory_manager.update_session_info(title=new_title)
-            console.print(f"✅ Updated session title to: {new_title}")
+            console.print(f"SUCCESS: Updated session title to: {new_title}")
         
         else:
-            console.print("❌ Invalid session command. Use /session for help.", style="red")
+            console.print("ERROR: Invalid session command. Use /session for help.", style="red")
         
         return True
     
@@ -922,47 +972,47 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             # Show current local model status
             local_model_path = config_manager.get_config_value('local_model_path')
             if local_model_path:
-                console.print(f"🤖 Current local model: {local_model_path}")
-                console.print("💡 Use: /lmodel <path> - to load a different model")
-                console.print("💡 Use: /lmodel unload - to unload the current model")
-                console.print("💡 Use: /provider local - to switch to local model")
+                console.print(f"MODEL: Current local model: {local_model_path}")
+                console.print("INFO: Use: /lmodel <path> - to load a different model")
+                console.print("INFO: Use: /lmodel unload - to unload the current model")
+                console.print("INFO: Use: /provider local - to switch to local model")
             else:
-                console.print("🤖 No local model loaded")
+                console.print("MODEL: No local model loaded")
                 console.print("\nUsage: /lmodel <model_path>")
                 console.print("\nExamples:")
                 console.print("  /lmodel ~/models/llama-2-7b")
                 console.print("  /lmodel /path/to/huggingface/model")
                 console.print("  /lmodel microsoft/phi-2")
-                console.print("\n💡 You can use:")
+                console.print("\nINFO: You can use:")
                 console.print("  • Local path to a downloaded model")
                 console.print("  • Hugging Face model ID (will download if needed)")
         elif parts[1] == "unload":
             # Unload the local model
             try:
                 ai_engine.unload_local_model()
-                console.print("✅ Local model unloaded successfully")
+                console.print("SUCCESS: Local model unloaded successfully")
                 # If current provider is local, switch to default
                 if context.get('provider') == 'local':
                     available_providers = config_manager.list_providers()
                     if available_providers:
                         context['provider'] = available_providers[0]
-                        console.print(f"✅ Switched to provider: {available_providers[0]}")
+                        console.print(f"SUCCESS: Switched to provider: {available_providers[0]}")
             except Exception as e:
-                console.print(f"❌ Error unloading model: {e}", style="red")
+                console.print(f"ERROR: Error unloading model: {e}", style="red")
         else:
             # Load a new local model
             model_path = " ".join(parts[1:])
-            console.print(f"🔄 Loading local model from: {model_path}")
+            console.print(f"INFO: Loading local model from: {model_path}")
             console.print("⏳ This may take a few minutes depending on model size...")
             
             try:
                 ai_engine.load_local_model(model_path)
-                console.print("✅ Local model loaded successfully!")
-                console.print("💡 Use: /provider local - to switch to the local model")
-                console.print("💡 Or the model will be used automatically if 'local' is your default provider")
+                console.print("SUCCESS: Local model loaded successfully!")
+                console.print("INFO: Use: /provider local - to switch to the local model")
+                console.print("INFO: Or the model will be used automatically if 'local' is your default provider")
             except Exception as e:
-                console.print(f"❌ Error loading model: {e}", style="red")
-                console.print("\n💡 Make sure you have installed the required dependencies:")
+                console.print(f"ERROR: Error loading model: {e}", style="red")
+                console.print("\nINFO: Make sure you have installed the required dependencies:")
                 console.print("   pip install transformers torch accelerate")
         return True
     
@@ -994,9 +1044,9 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             
             if is_valid:
                 config_manager.set_config('typing_speed', new_speed)
-                console.print(f"✅ Typing speed set to: {new_speed}")
+                console.print(f"SUCCESS: Typing speed set to: {new_speed}")
             else:
-                console.print(f"❌ Invalid speed: {new_speed}", style="red")
+                console.print(f"ERROR: Invalid speed: {new_speed}", style="red")
                 console.print("Valid options: instant, fast, normal, slow, or a number")
         
         return True
@@ -1051,7 +1101,7 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         
         elif parts[1] == "remove":
             if len(parts) < 4:
-                console.print("❌ Usage: /rules remove <global|workspace> <index>", style="red")
+                console.print("ERROR: Usage: /rules remove <global|workspace> <index>", style="red")
             else:
                 rule_type = parts[2].lower()
                 try:
@@ -1061,13 +1111,13 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     elif rule_type == "workspace":
                         rules_manager.remove_workspace_rule(index, current_workspace)
                     else:
-                        console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+                        console.print("ERROR: Rule type must be 'global' or 'workspace'", style="red")
                 except ValueError:
-                    console.print("❌ Index must be a number", style="red")
+                    console.print("ERROR: Index must be a number", style="red")
         
         elif parts[1] == "clear":
             if len(parts) < 3:
-                console.print("❌ Usage: /rules clear <global|workspace>", style="red")
+                console.print("ERROR: Usage: /rules clear <global|workspace>", style="red")
             else:
                 rule_type = parts[2].lower()
                 if rule_type == "global":
@@ -1075,16 +1125,16 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 elif rule_type == "workspace":
                     rules_manager.clear_workspace_rules(current_workspace)
                 else:
-                    console.print("❌ Rule type must be 'global' or 'workspace'", style="red")
+                    console.print("ERROR: Rule type must be 'global' or 'workspace'", style="red")
         
         else:
-            console.print("❌ Invalid rules command. Use /rules for help.", style="red")
+            console.print("ERROR: Invalid rules command. Use /rules for help.", style="red")
         
         return True
     
     elif cmd == "clear":
         console.clear()
-        console.print("💬 Chat cleared")
+        console.print("Chat cleared")
         return True
     
     elif cmd == "ps" or cmd == "processes":
@@ -1099,26 +1149,26 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             if result.success and result.data:
                 processes = result.data.get('processes', [])
                 if not processes:
-                    console.print("📋 No background processes running", style="dim")
+                    console.print("PROCESS: No background processes running", style="dim")
                 else:
-                    console.print(f"\n📋 Running Processes ({len(processes)}):", style="bold")
+                    console.print(f"\nPROCESS: Running Processes ({len(processes)}):", style="bold")
                     for proc in processes:
                         status_color = "green" if proc['status'] == 'running' else "yellow"
                         console.print(f"  • PID: {proc['process_id']} - {proc['command'][:50]}... [{proc['status']}]", style=status_color)
                         console.print(f"    Running for: {proc['running_time']:.1f}s", style="dim")
-                    console.print("\n💡 Use /ct <process_id> to terminate a process\n", style="dim")
+                    console.print("\nINFO: Use /ct <process_id> to terminate a process\n", style="dim")
             else:
-                console.print("❌ Failed to get process list", style="red")
+                console.print("ERROR: Failed to get process list", style="red")
         except Exception as e:
-            console.print(f"❌ Error: {str(e)}", style="red")
+            console.print(f"ERROR: {str(e)}", style="red")
         
         return True
     
     elif cmd == "ct" or cmd == "cancel":
         # Cancel/terminate a background process
         if len(parts) < 2:
-            console.print("❌ Usage: /ct <process_id>", style="red")
-            console.print("💡 Tip: Process IDs are shown when commands run in background", style="dim")
+            console.print("ERROR: Usage: /ct <process_id>", style="red")
+            console.print("INFO: Tip: Process IDs are shown when commands run in background", style="dim")
             return True
         
         process_id = parts[1]
@@ -1131,11 +1181,11 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             )
             
             if result.success:
-                console.print(f"✅ Process {process_id} terminated successfully", style="green")
+                console.print(f"SUCCESS: Process {process_id} terminated successfully", style="green")
             else:
-                console.print(f"❌ Failed to terminate process: {result.error}", style="red")
+                console.print(f"ERROR: Failed to terminate process: {result.error}", style="red")
         except Exception as e:
-            console.print(f"❌ Error: {str(e)}", style="red")
+            console.print(f"ERROR: {str(e)}", style="red")
         
         return True
     
@@ -1143,7 +1193,7 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         return False
     
     else:
-        console.print(f"❌ Unknown command: /{cmd}. Type /help for available commands.", style="red")
+        console.print(f"ERROR: Unknown command: /{cmd}. Type /help for available commands.", style="red")
         return True
 
 def show_help():
