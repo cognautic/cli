@@ -69,7 +69,7 @@ added 1432 packages in 45s
 
 **Terminal Mode After:**
 ```
-🖥️  You: npm install
+>  You: npm install
 added 1 package in 0.5s
 added 5 packages in 1.2s
 added 15 packages in 2.8s
