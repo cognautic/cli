@@ -960,7 +960,7 @@ class AIEngine:
                 return
 
             # Only continue if the auto-continuation manager says so
-            if self.auto_continuation.should_continue(tool_results, has_end_response):
+            if self.auto_continuation.should_continue(tool_results, has_end_response, buffer):
                 yield "... \n"
 
                 # Add assistant's response to messages
@@ -968,7 +968,7 @@ class AIEngine:
 
                 # Build continuation prompt
                 continuation_prompt = self.auto_continuation.build_continuation_prompt(
-                    tool_results
+                    tool_results, buffer
                 )
 
                 # Add continuation prompt to messages
@@ -2255,6 +2255,79 @@ For web search:
 }
 ```
 
+For directory context and project structure:
+
+```json
+{
+  "tool_code": "directory_context",
+  "args": {
+    "operation": "get_directory_summary"
+  }
+}
+```
+
+```json
+{
+  "tool_code": "directory_context",
+  "args": {
+    "operation": "list_directory_tree",
+    "max_depth": 3
+  }
+}
+```
+
+```json
+{
+  "tool_code": "directory_context",
+  "args": {
+    "operation": "get_project_structure"
+  }
+}
+```
+
+For code navigation (jump to definition, find references, search symbols):
+
+```json
+{
+  "tool_code": "code_navigation",
+  "args": {
+    "operation": "jump_to_definition",
+    "symbol": "MyClass"
+  }
+}
+```
+
+```json
+{
+  "tool_code": "code_navigation",
+  "args": {
+    "operation": "find_references",
+    "symbol": "myFunction"
+  }
+}
+```
+
+```json
+{
+  "tool_code": "code_navigation",
+  "args": {
+    "operation": "search_symbols",
+    "query": "handler",
+    "symbol_type": "function"
+  }
+}
+```
+
+```json
+{
+  "tool_code": "code_navigation",
+  "args": {
+    "operation": "list_symbols",
+    "file_path": "src/main.py"
+  }
+}
+```
+
 EXAMPLE WORKFLOWS:
 
 When user asks to ADD FEATURE to existing project (e.g., "add export button to cymox"):
@@ -2308,10 +2381,14 @@ Available tools:
 - command_runner: Execute shell commands (use run_async_command for long tasks)
 - web_search: Search the web for information
 - response_control: Use end_response when task is complete
+- directory_context: Get detailed directory structure and project information
+- code_navigation: Jump to definition, find references, search symbols in code
 
-RESPONSE CONTINUATION (CRITICAL - ALWAYS USE end_response):
-- By default, after executing tools, the AI will automatically continue to complete the task
-- YOU MUST ALWAYS use the response_control tool when you finish ALL work:
+RESPONSE CONTINUATION (CRITICAL - SYSTEM WILL AUTO-CONTINUE):
+- ⚠️ IMPORTANT: The system will AUTOMATICALLY continue your response after EVERY message
+- This means you will KEEP GETTING called until you explicitly call end_response
+- YOU MUST call end_response when you finish ALL work, or you'll loop forever:
+
 ```json
 {
   "tool_code": "response_control",
@@ -2320,16 +2397,21 @@ RESPONSE CONTINUATION (CRITICAL - ALWAYS USE end_response):
   }
 }
 ```
-- WHEN TO USE end_response (ALWAYS use it in these cases):
-  * After creating/modifying ALL requested files
-  * After completing ALL steps of a multi-step task
-  * After providing final explanation or summary
-  * Basically: ALWAYS use it when you're done with everything
-- Do NOT use end_response ONLY if:
-  * The task is incomplete
-  * You're waiting for user input
-  * You need to execute more tools
-- IMPORTANT: Forgetting to use end_response causes the user to manually type "continue" - ALWAYS use it!
+
+- HOW IT WORKS:
+  * You respond → System auto-continues → You respond again → System auto-continues → ...
+  * This loop ONLY stops when you call end_response
+  * If you say "I will use a tool" but don't execute it, system will auto-continue and remind you
+  * If you execute tools, system will auto-continue for next steps
+  * If you do nothing, system will still auto-continue
+
+- WHEN TO USE end_response (THE ONLY WAY TO STOP):
+  * ✅ After completing ALL requested work
+  * ✅ After providing final summary/instructions
+  * ✅ When task is 100% complete
+  * ❌ NEVER use it if task is incomplete - system will continue for you
+
+- CRITICAL: If you forget end_response, you'll keep getting called in an infinite loop!
 
 REMEMBER:
 1. Use tools to actually perform actions, don't just provide code examples!
@@ -2459,6 +2541,70 @@ When creating or modifying files:
         if project_path:
             prompt += f"\n\nCurrent project path: {project_path}"
             prompt += "\nYou can analyze and modify files in this project."
+            
+            # Add directory context automatically
+            try:
+                from pathlib import Path
+                project_dir = Path(project_path)
+                if project_dir.exists() and project_dir.is_dir():
+                    prompt += "\n\n" + "=" * 80
+                    prompt += "\n📁 CURRENT DIRECTORY CONTENTS (AUTO-PROVIDED FOR CONTEXT)"
+                    prompt += "\n" + "=" * 80
+                    
+                    # List immediate directory contents
+                    contents = []
+                    files = []
+                    dirs = []
+                    
+                    try:
+                        for item in sorted(project_dir.iterdir()):
+                            if item.name.startswith('.') and item.name not in ['.gitignore', '.env.example']:
+                                continue  # Skip hidden files except important ones
+                            
+                            if item.is_dir():
+                                # Count items in directory
+                                try:
+                                    item_count = len(list(item.iterdir()))
+                                    dirs.append(f"  📂 {item.name}/ ({item_count} items)")
+                                except (PermissionError, OSError):
+                                    dirs.append(f"  📂 {item.name}/")
+                            else:
+                                # Get file size
+                                try:
+                                    size = item.stat().st_size
+                                    if size < 1024:
+                                        size_str = f"{size}B"
+                                    elif size < 1024 * 1024:
+                                        size_str = f"{size/1024:.1f}KB"
+                                    else:
+                                        size_str = f"{size/(1024*1024):.1f}MB"
+                                    files.append(f"  📄 {item.name} ({size_str})")
+                                except (PermissionError, OSError):
+                                    files.append(f"  📄 {item.name}")
+                        
+                        prompt += f"\n\nDirectory: {project_path}"
+                        prompt += f"\n\nDirectories ({len(dirs)}):"
+                        if dirs:
+                            prompt += "\n" + "\n".join(dirs)
+                        else:
+                            prompt += "\n  (none)"
+                        
+                        prompt += f"\n\nFiles ({len(files)}):"
+                        if files:
+                            prompt += "\n" + "\n".join(files)
+                        else:
+                            prompt += "\n  (none)"
+                        
+                        prompt += "\n\n" + "=" * 80
+                        prompt += "\nℹ️  This directory listing is provided automatically for your context."
+                        prompt += "\nℹ️  You can use the 'directory_context' tool for more detailed information."
+                        prompt += "\n" + "=" * 80
+                        
+                    except PermissionError:
+                        prompt += "\n\n⚠️  Permission denied accessing directory contents."
+            except Exception:
+                # Silently fail if directory context can't be added
+                pass
 
         return prompt
 

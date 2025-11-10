@@ -26,129 +26,124 @@ class AutoContinuationManager:
         self.iteration_count = 0
         self.previous_tool_types = []
     
-    def should_continue(self, tool_results: List[Dict[str, Any]], has_end_response: bool) -> bool:
+    def should_continue(
+        self, 
+        tool_results: List[Dict[str, Any]], 
+        has_end_response: bool,
+        ai_response: str = ""
+    ) -> bool:
         """
         Determine if AI should automatically continue
+        
+        SIMPLIFIED LOGIC: Always continue EXCEPT when end_response is called
+        This ensures AI completes tasks without manual intervention
         
         Args:
             tool_results: List of tool execution results
             has_end_response: Whether end_response tool was called
+            ai_response: The AI's text response (to detect promises without execution)
             
         Returns:
             True if should continue, False otherwise
         """
-        # Don't continue if end_response was explicitly called
+        # RULE 1: Don't continue if end_response was explicitly called
+        # This is the ONLY condition that stops auto-continuation
         if has_end_response:
             return False
         
-        # Don't continue if max iterations reached
+        # RULE 2: Don't continue if max iterations reached (safety limit)
         if self.iteration_count >= self.max_iterations:
             return False
         
-        # Don't continue if no tools were executed
+        # RULE 3: Check if AI said it would use tools but didn't execute them
+        # This handles the scenario where AI says "I will use X tool" but doesn't
+        if not tool_results and ai_response:
+            promise_indicators = [
+                "i will use",
+                "i can use",
+                "let me use",
+                "i'll use",
+                "using the",
+                "i will call",
+                "i'll call",
+                "let me call",
+                "i can help you with that",
+                "i will list",
+                "i will find",
+                "i will search",
+                "i will check",
+                "i will analyze",
+                "i will show",
+                "i will count"
+            ]
+            
+            ai_lower = ai_response.lower()
+            
+            # Check if AI promised to use tools
+            promised_to_use_tools = any(indicator in ai_lower for indicator in promise_indicators)
+            
+            # Check if AI mentioned specific tools
+            tool_mentions = [
+                "code_navigation",
+                "directory_context",
+                "file_operations",
+                "web_search",
+                "command_runner",
+                "tool"
+            ]
+            mentioned_tools = any(tool in ai_lower for tool in tool_mentions)
+            
+            # If AI promised to use tools or mentioned specific tools but didn't execute any
+            if promised_to_use_tools or mentioned_tools:
+                self.iteration_count += 1
+                return True
+        
+        # RULE 4: If no tools were executed and no promises detected, still continue
+        # The AI might need another chance to complete the task
         if not tool_results:
-            return False
-        
-        # Check if there were any errors
-        has_errors = any(r.get('type') == 'error' for r in tool_results)
-        
-        # Check what types of tools were executed
-        has_file_ops = any(r.get('type') in ['file_op', 'file_write'] for r in tool_results)  # Exclude file_read from has_file_ops
-        has_file_read = any(r.get('type') in ['file_read', 'file_reader'] for r in tool_results)  # Include both file reading types
-        has_commands = any(r.get('type') == 'command' for r in tool_results)
-        has_background_commands = any(
-            r.get('type') == 'command' and 'background' in str(r.get('command', ''))
-            for r in tool_results
-        )
-        
-        # Check for web searches (which might indicate looking for information before proceeding)
-        has_web_search = any(r.get('type') in ['web_search', 'web_fetch'] for r in tool_results)
-        
-        # Check if commands were exploratory (ls, pwd, dir, etc.)
-        exploratory_commands = ['ls', 'pwd', 'dir', 'cd', 'find', 'tree', 'cat', 'head', 'tail']
-        has_exploratory_commands = any(
-            r.get('type') == 'command' and 
-            any(cmd in str(r.get('command', '')).lower() for cmd in exploratory_commands)
-            for r in tool_results
-        )
-        
-        # Track current tool types for repetition detection
-        current_tool_types = []
-        for result in tool_results:
-            tool_type = result.get('type', 'unknown')
-            current_tool_types.append(tool_type)
-        
-        # Check for repeated operations of the same type (especially web searches)
-        is_repeating_search = (
-            has_web_search and 
-            self.previous_tool_types and 
-            all('web_search' in prev_type or 'web_fetch' in prev_type for prev_type in self.previous_tool_types[-3:])
-        )
-        
-        # Store current types for next check (keep last 5 to detect patterns)
-        self.previous_tool_types.extend(current_tool_types)
-        self.previous_tool_types = self.previous_tool_types[-5:]  # Keep only last 5
-        
-        # Smart continuation logic:
-        # 1. If there are errors, continue to let AI handle them
-        if has_errors:
-            self.iteration_count += 1
-            return True
-
-        # 2. If file was read, always continue so AI can act on the content
-        if has_file_read:
             self.iteration_count += 1
             return True
         
-        # 3. If repeating the same operation (like web searches), don't continue to break the loop
-        if is_repeating_search and self.iteration_count > 3:
-            return False  # Break the loop if repeating searches for more than 3 iterations
-        
-        # 4. If only file operations were done, likely need to run commands next
-        if has_file_ops and not has_commands:
-            self.iteration_count += 1
-            return True
-        
-        # 5. If only exploratory commands (ls, pwd, etc.), continue to do actual work
-        if has_exploratory_commands and not (has_file_ops or has_file_read):
-            self.iteration_count += 1
-            return True
-        
-        # 6. If web search was performed, often AI should continue to create files/execute commands with the information
-        if has_web_search and not has_file_ops:
-            self.iteration_count += 1
-            return True
-        
-        # 7. If background commands were started AND files created, task likely complete
-        if has_background_commands and (has_file_ops or has_file_read):
-            return False
-        
-        # 8. If only background commands (no files), don't continue (they're running)
-        if has_background_commands and not (has_file_ops or has_file_read):
-            return False
-        
-        # 9. If regular commands executed with file ops, task likely complete
-        if has_commands and has_file_ops and not has_exploratory_commands:
-            return False
-        
-        # 10. Default: Continue if we're early in the process
-        # This ensures AI completes the full task
-        if self.iteration_count < 3:
-            self.iteration_count += 1
-            return True
-        
-        return False
+        # RULE 5: If ANY tools were executed, ALWAYS continue
+        # Let the AI decide when it's done by calling end_response
+        self.iteration_count += 1
+        return True
     
-    def build_continuation_prompt(self, tool_results: List[Dict[str, Any]]) -> str:
+    def build_continuation_prompt(
+        self, 
+        tool_results: List[Dict[str, Any]],
+        ai_response: str = ""
+    ) -> str:
         """
         Build an appropriate continuation prompt based on tool results
         
         Args:
             tool_results: List of tool execution results
+            ai_response: The AI's text response (to provide context)
             
         Returns:
             Continuation prompt string
         """
+        # Special case: AI said it would use tools but didn't
+        if not tool_results and ai_response:
+            return """You said you would use a tool, but you didn't actually execute it.
+
+CRITICAL: You MUST include the actual JSON tool call in your response, not just say you will do it.
+
+For example, if you want to use code_navigation to list symbols, you MUST include:
+
+```json
+{
+  "tool_code": "code_navigation",
+  "args": {
+    "operation": "list_symbols",
+    "file_path": "main.py"
+  }
+}
+```
+
+Now execute the tool you mentioned:"""
+        
         # Categorize tool results
         has_file_ops = any(r.get('type') in ['file_op', 'file_write', 'file_read'] for r in tool_results)
         has_commands = any(r.get('type') == 'command' for r in tool_results)

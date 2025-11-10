@@ -49,6 +49,8 @@ class ToolRegistry:
         from .code_analysis import CodeAnalysisTool
         from .response_control import ResponseControlTool
         from .file_reader import FileReaderTool
+        from .directory_context import DirectoryContextTool
+        from .code_navigation import CodeNavigationTool
         
         # Register tools
         self.register_tool(FileOperationsTool())
@@ -57,6 +59,8 @@ class ToolRegistry:
         self.register_tool(CodeAnalysisTool())
         self.register_tool(ResponseControlTool())
         self.register_tool(FileReaderTool())
+        self.register_tool(DirectoryContextTool())
+        self.register_tool(CodeNavigationTool())
     
     def register_tool(self, tool: BaseTool):
         """Register a tool"""

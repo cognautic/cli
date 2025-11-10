@@ -75,19 +75,8 @@ from .rules import RulesManager
 
 console = Console()
 
-# Global flag to stop AI response
-stop_response = False
-
-def signal_handler(signum, frame):
-    """Handle Ctrl+X (SIGQUIT) to stop AI response"""
-    global stop_response
-    stop_response = True
-
-
-
-
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.1.3", prog_name="Cognautic CLI")
+@click.version_option(version="1.1.4", prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -187,16 +176,16 @@ def chat(provider, model, project_path, websocket_port, session):
     websocket_server = WebSocketServer(ai_engine, port=websocket_port)
     
     async def run_chat():
-        global stop_response
-        
-        # Set up Ctrl+X signal handler (SIGQUIT)
-        signal.signal(signal.SIGQUIT, signal_handler)
-        
         # Start WebSocket server
         server_task = asyncio.create_task(websocket_server.start())
         
+        # Track last Ctrl+C time for double-tap detection
+        import time
+        last_ctrl_c_time = [0]  # Use list to make it mutable in nested function
+        
         try:
-            console.print("INFO: Type '/help' for commands, 'exit' to quit")
+            console.print("INFO: Type '/help' for commands, or press Ctrl+C twice to exit")
+            console.print("INFO: Press Enter to send, Alt+Enter for new line")
             console.print("INFO: Press Shift+Tab to toggle Terminal mode")
             if project_path:
                 console.print(f"DIR: Working in: {project_path}")
@@ -246,7 +235,7 @@ def chat(provider, model, project_path, websocket_port, session):
             # Terminal mode state
             terminal_mode = [False]  # Use list to make it mutable in nested function
             
-            # Setup key bindings for Shift+Tab toggle
+            # Setup key bindings for Shift+Tab toggle and multi-line support
             bindings = KeyBindings()
             
             @bindings.add('s-tab')  # Shift+Tab
@@ -257,8 +246,19 @@ def chat(provider, model, project_path, websocket_port, session):
                 event.app.current_buffer.text = ''
                 event.app.exit(result='__MODE_TOGGLE__')
             
-            # Create prompt session
-            session = PromptSession(key_bindings=bindings)
+            @bindings.add('enter')  # Enter key submits
+            def submit_message(event):
+                event.current_buffer.validate_and_handle()
+            
+            @bindings.add('escape', 'enter')  # Meta+Enter (Alt+Enter) adds new line
+            def new_line(event):
+                event.current_buffer.insert_text('\n')
+            
+            # Create prompt session with multi-line support
+            session = PromptSession(
+                key_bindings=bindings,
+                multiline=True  # Allow multi-line editing
+            )
             
             console.print("[dim]INFO: Press Shift+Tab to toggle between Chat and Terminal modes[/dim]\n")
             
@@ -339,7 +339,7 @@ def chat(provider, model, project_path, websocket_port, session):
                                     console.print(f"[yellow]Exit code: {returncode}[/yellow]")
                                     
                             except KeyboardInterrupt:
-                                # Handle Ctrl+C - terminate the process
+                                # Handle Ctrl+C - terminate the process but don't exit CLI
                                 console.print("\n[yellow]^C[/yellow]")
                                 process.terminate()
                                 try:
@@ -419,8 +419,10 @@ def chat(provider, model, project_path, websocket_port, session):
                     console.print("[bold magenta]─[/bold magenta]" * 50)
                     console.print("[bold magenta]AI:[/bold magenta] ", end="")
                     full_response = ""
-                    response_stopped = False
-                    stop_response = False  # Reset stop flag
+                    
+                    # Disable Ctrl+C during AI response
+                    import signal
+                    original_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
                     
                     try:
                         async for chunk in ai_engine.process_message_stream(
@@ -430,42 +432,36 @@ def chat(provider, model, project_path, websocket_port, session):
                             project_path=current_workspace,
                             conversation_history=conversation_history
                         ):
-                            # Check if stop was requested
-                            if stop_response:
-                                response_stopped = True
-                                console.print("\n\n[yellow]⏸️  AI response stopped by user (Ctrl+X)[/yellow]")
-                                break
-                            
                             # Display character by character for typewriter effect
                             for char in chunk:
-                                # Check stop flag during character display too
-                                if stop_response:
-                                    response_stopped = True
-                                    console.print("\n\n[yellow]⏸️  AI response stopped by user (Ctrl+X)[/yellow]")
-                                    break
                                 console.print(char, end="")
                                 full_response += char
                                 if typing_delay > 0:
                                     await asyncio.sleep(typing_delay)
-                            
-                            if response_stopped:
-                                break
-                    except KeyboardInterrupt:
-                        # Ctrl+C pressed - exit chat
-                        break
+                    finally:
+                        # Re-enable Ctrl+C after AI response
+                        signal.signal(signal.SIGINT, original_handler)
                     
                     console.print()  # New line after streaming
                     console.print("[bold magenta]─[/bold magenta]" * 50)  # Border after AI response
                     
-                    # Add AI response to memory (even if stopped)
+                    # Add AI response to memory
                     if full_response:
                         memory_manager.add_message("assistant", full_response)
                     
-                    # Don't break - continue to next prompt
-                    
                 except KeyboardInterrupt:
-                    # Ctrl+C pressed while waiting for user input - exit chat
-                    break
+                    # Ctrl+C pressed while waiting for user input
+                    current_time = time.time()
+                    time_since_last = current_time - last_ctrl_c_time[0]
+                    
+                    if time_since_last < 2.0:  # Double tap within 2 seconds
+                        console.print("\n[yellow]Exiting...[/yellow]")
+                        break
+                    else:
+                        # First Ctrl+C - show hint
+                        console.print("\n[dim]Press Ctrl+C again within 2 seconds to exit, or type 'exit'[/dim]")
+                        last_ctrl_c_time[0] = current_time
+                        continue
                 except Exception as e:
                     console.print(f"ERROR: {str(e)}", style="red")
         
@@ -1200,6 +1196,9 @@ def show_help():
     """Show help information"""
     help_text = Text()
     help_text.append("Available commands:\n", style="bold")
+    help_text.append("• Press Enter - Send message\n", style="bold green")
+    help_text.append("• Press Alt+Enter - New line (multi-line input)\n", style="bold green")
+    help_text.append("• Press Ctrl+C twice - Exit CLI\n", style="bold yellow")
     help_text.append("• Press Shift+Tab - Toggle between Chat and Terminal modes\n", style="bold yellow")
     help_text.append("• /help - Show this help message\n")
     help_text.append("• /workspace <path> or /ws <path> - Change working directory\n")
