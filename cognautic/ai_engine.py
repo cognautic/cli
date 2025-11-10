@@ -3,15 +3,15 @@ AI Engine for multi-provider AI interactions
 """
 
 import asyncio
-from typing import Dict, Any, Optional, List
-from abc import ABC, abstractmethod
 import json
+from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from .config import ConfigManager
-from .tools import ToolRegistry
-from .provider_endpoints import GenericAPIClient, get_all_providers, get_provider_config
 from .auto_continuation import AutoContinuationManager
+from .config import ConfigManager
+from .provider_endpoints import GenericAPIClient, get_all_providers, get_provider_config
+from .tools import ToolRegistry
 
 
 class AIProvider(ABC):
@@ -189,7 +189,25 @@ class GoogleProvider(AIProvider):
                     temperature=kwargs.get("temperature", 0.7),
                 ),
             )
-            return response.text
+            try:
+                return response.text
+            except ValueError as ve:
+                if "Invalid operation: The `response.text` quick accessor" in str(ve):
+                    # Handle response with no valid parts
+                    if hasattr(response, "candidates") and response.candidates:
+                        # Try to get text from the candidate parts
+                        for candidate in response.candidates:
+                            if hasattr(candidate, "content") and hasattr(
+                                candidate.content, "parts"
+                            ):
+                                for part in candidate.content.parts:
+                                    if hasattr(part, "text") and part.text:
+                                        return part.text
+                    return (
+                        "No response generated"  # Return empty string if no text found
+                    )
+                else:
+                    raise ve
         except Exception as e:
             raise Exception(f"Google API error: {str(e)}")
 
@@ -220,8 +238,23 @@ class GoogleProvider(AIProvider):
             )
 
             for chunk in response:
-                if chunk.text:
-                    yield chunk.text
+                try:
+                    if hasattr(chunk, "text") and chunk.text:
+                        yield chunk.text
+                    elif hasattr(chunk, "parts") and chunk.parts:
+                        # Handle response with parts but no direct text
+                        for part in chunk.parts:
+                            if hasattr(part, "text") and part.text:
+                                yield part.text
+                except ValueError as ve:
+                    # Handle the case where chunk.text is accessed but no valid parts exist
+                    if "Invalid operation: The `response.text` quick accessor" in str(
+                        ve
+                    ):
+                        continue
+                    else:
+                        # Re-raise other ValueErrors
+                        raise ve
         except Exception as e:
             raise Exception(f"Google API error: {str(e)}")
 
@@ -329,8 +362,9 @@ class LocalModelProvider(AIProvider):
     def _load_gguf_model(self):
         """Load a GGUF quantized model using llama-cpp-python"""
         try:
-            from llama_cpp import Llama
             import os
+
+            from llama_cpp import Llama
 
             print(f"Loading GGUF model from {self.model_path}...")
 
@@ -369,7 +403,7 @@ class LocalModelProvider(AIProvider):
             )
             self.device = "cpu"
             print(
-                f"✅ GGUF model loaded successfully on {self.device} ({n_threads} threads)"
+                f"SUCCESS: GGUF model loaded successfully on {self.device} ({n_threads} threads)"
             )
 
         except ImportError:
@@ -385,8 +419,8 @@ class LocalModelProvider(AIProvider):
     def _load_hf_model(self):
         """Load a Hugging Face transformers model"""
         try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
             import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
 
             # Determine device
             if torch.cuda.is_available():
@@ -415,7 +449,7 @@ class LocalModelProvider(AIProvider):
                 )
                 self.model.to(self.device)
 
-            print(f"✅ Model loaded successfully on {self.device}")
+            print(f"SUCCESS: Model loaded successfully on {self.device}")
 
         except ImportError:
             raise ImportError(
@@ -796,15 +830,15 @@ class AIEngine:
         recursion_depth: int = 0,
     ):
         """Stream AI response with real-time tool detection and execution"""
-        import re
         import json
-        
+        import re
+
         # Prevent infinite recursion
         MAX_RECURSION_DEPTH = 10
         if recursion_depth >= MAX_RECURSION_DEPTH:
-            yield "\n⚠️ **Warning:** Maximum continuation depth reached.\n"
+            yield "\n**WARNING:** Maximum continuation depth reached.\n"
             return
-        
+
         # Buffer to accumulate streaming response
         buffer = ""
         yielded_length = 0
@@ -812,9 +846,9 @@ class AIEngine:
         json_block_start = -1
         has_executed_tools = False
         tool_results = []
-        
+
         # Check if provider supports streaming
-        if not hasattr(ai_provider, 'generate_response_stream'):
+        if not hasattr(ai_provider, "generate_response_stream"):
             # Fall back to non-streaming
             response = await ai_provider.generate_response(
                 messages=messages,
@@ -827,7 +861,7 @@ class AIEngine:
             ):
                 yield chunk
             return
-        
+
         # Stream the response
         try:
             async for chunk in ai_provider.generate_response_stream(
@@ -838,18 +872,20 @@ class AIEngine:
             ):
                 if not chunk:
                     continue
-                
+
                 buffer += chunk
-                
+
                 # Check for JSON block markers
                 if not in_json_block:
                     # Look for start of JSON block
-                    json_start_match = re.search(r'```json\s*\n', buffer[yielded_length:])
+                    json_start_match = re.search(
+                        r"```json\s*\n", buffer[yielded_length:]
+                    )
                     if json_start_match:
                         # Found start of JSON block
                         in_json_block = True
                         json_block_start = yielded_length + json_start_match.start()
-                        
+
                         # Yield everything BEFORE the JSON block
                         if json_block_start > yielded_length:
                             text_to_yield = buffer[yielded_length:json_block_start]
@@ -867,37 +903,37 @@ class AIEngine:
                             yielded_length = len(buffer) - 10
                 else:
                     # Inside JSON block, look for the end
-                    json_end_match = re.search(r'\n```', buffer[json_block_start:])
+                    json_end_match = re.search(r"\n```", buffer[json_block_start:])
                     if json_end_match:
                         # Found end of JSON block
                         json_block_end = json_block_start + json_end_match.end()
-                        
+
                         # Extract the complete JSON block
                         json_block = buffer[json_block_start:json_block_end]
-                        
+
                         # Parse and execute the tool call immediately
-                        json_pattern = r'```json\s*\n(.*?)\n```'
+                        json_pattern = r"```json\s*\n(.*?)\n```"
                         match = re.search(json_pattern, json_block, re.DOTALL)
                         if match:
                             try:
                                 tool_call = json.loads(match.group(1).strip())
-                                
+
                                 # Execute tool and yield result immediately
                                 async for tool_result in self._execute_single_tool_live(
                                     tool_call, project_path, tool_results
                                 ):
                                     yield tool_result
-                                    
+
                                 has_executed_tools = True
-                                
+
                             except json.JSONDecodeError as je:
-                                yield f"\n⚠️ **JSON Parse Warning:** {str(je)}\n"
-                        
+                                yield f"\n**WARNING:** JSON Parse Warning: {str(je)}\n"
+
                         # Update state
                         in_json_block = False
                         yielded_length = json_block_end
                         json_block_start = -1
-            
+
             # Yield any remaining content
             if yielded_length < len(buffer):
                 remaining = buffer[yielded_length:]
@@ -905,45 +941,109 @@ class AIEngine:
                     remaining = self._clean_model_syntax(remaining)
                     if remaining.strip():
                         yield remaining
-            
+
             # Check if end_response was called
-            has_end_response = any(r.get("type") == "control" and r.get("message") == "end_response" for r in tool_results)
-            
+            has_end_response = any(
+                r.get("type") == "control" and r.get("message") == "end_response"
+                for r in tool_results
+            )
+
             # Don't auto-continue if:
             # 1. end_response was explicitly called
             # 2. No tools were executed
             # 3. Max recursion depth reached
-            if has_end_response or not has_executed_tools or recursion_depth >= MAX_RECURSION_DEPTH:
+            if (
+                has_end_response
+                or not has_executed_tools
+                or recursion_depth >= MAX_RECURSION_DEPTH
+            ):
                 return
-            
+
             # Only continue if the auto-continuation manager says so
             if self.auto_continuation.should_continue(tool_results, has_end_response):
-                yield "\n\n🔄 **Auto-continuing...**\n\n"
-                
+                yield "... \n"
+
                 # Add assistant's response to messages
                 messages.append({"role": "assistant", "content": buffer})
-                
-                # Generate continuation
-                final_response = await self.auto_continuation.generate_continuation(
-                    ai_provider=ai_provider,
-                    messages=messages,
-                    tool_results=tool_results,
-                    model=model,
-                    config=config
+
+                # Build continuation prompt
+                continuation_prompt = self.auto_continuation.build_continuation_prompt(
+                    tool_results
                 )
-                
-                # Recursively stream continuation
+
+                # Add continuation prompt to messages
+                messages.append({"role": "user", "content": continuation_prompt})
+
+                # Recursively stream continuation with updated messages
                 async for chunk in self._stream_with_live_tools(
-                    ai_provider, messages, model, max_tokens, config, project_path, recursion_depth + 1
+                    ai_provider,
+                    messages,
+                    model,
+                    max_tokens,
+                    config,
+                    project_path,
+                    recursion_depth + 1,
                 ):
                     yield chunk
-                    
+
         except Exception as e:
             import traceback
-            yield f"\n❌ **Streaming Error:** {str(e)}\n"
+
+            yield f"\n**ERROR:** {str(e)}\n"
             yield f"\n**Traceback:**\n{traceback.format_exc()}\n"
 
-    async def _execute_single_tool_live(self, tool_call: dict, project_path: str, tool_results: list):
+    def _format_tool_box(self, title: str, content_lines: list, width: int = 65) -> str:
+        """Format a tool execution box with proper alignment"""
+        import re
+
+        # Top border
+        box = f"\n\n╔{'═' * (width - 2)}╗\n"
+        # Title - truncate if too long
+        if len(title) > width - 4:
+            title = title[: width - 7] + "..."
+        box += f"║ {title:<{width - 4}} ║\n"
+        # Separator if there's content
+        if content_lines:
+            box += f"╠{'═' * (width - 2)}╣\n"
+            # Content lines
+            for line in content_lines:
+                # Remove ANSI codes for length calculation
+                clean_line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+                display_len = len(clean_line)
+                # Truncate line if too long
+                if display_len > width - 4:
+                    # Keep ANSI codes but truncate visible text
+                    visible_len = 0
+                    truncated = ""
+                    in_ansi = False
+                    for char in line:
+                        if char == "\x1b":
+                            in_ansi = True
+                        if in_ansi:
+                            truncated += char
+                            if char == "m":
+                                in_ansi = False
+                        else:
+                            if visible_len < width - 7:
+                                truncated += char
+                                visible_len += 1
+                            elif visible_len == width - 7:
+                                truncated += "..."
+                                visible_len += 3
+                                break
+                    line = truncated
+                    clean_line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+                    display_len = len(clean_line)
+
+                padding = width - 4 - display_len
+                box += f"║ {line}{' ' * max(0, padding)} ║\n"
+        # Bottom border
+        box += f"╚{'═' * (width - 2)}╝\n\n"
+        return box
+
+    async def _execute_single_tool_live(
+        self, tool_call: dict, project_path: str, tool_results: list
+    ):
         """Execute a single tool call and yield the result immediately"""
         try:
             tool_name = tool_call.get("tool_code")
@@ -953,7 +1053,8 @@ class AIEngine:
             if tool_name == "response_control":
                 operation = args.get("operation", "end_response")
                 if operation == "end_response":
-                    yield "\n✅ **Response Completed**\n"
+                    box = self._format_tool_box("Response Completed", [])
+                    yield box
                     tool_results.append({"type": "control", "message": "end_response"})
                 return
 
@@ -968,38 +1069,83 @@ class AIEngine:
                 result = await self.tool_registry.execute_tool(
                     "command_runner", user_id="ai_engine", **cmd_args
                 )
-                
+
                 if result.success:
                     command = args.get("command", "unknown")
                     operation = cmd_args.get("operation", "run_command")
-                    
+
                     if operation == "run_async_command":
                         process_id = result.data.get("process_id", "unknown")
                         pid = result.data.get("pid", "unknown")
-                        yield f"\n✅ **Tool Used:** command_runner (background)\n⚡ **Command:** {command}\n🔄 **Status:** Running in background\n📋 **Process ID:** {process_id} (PID: {pid})\n💡 **Tip:** Use `/ct {process_id}` to terminate\n"
-                        tool_results.append({"type": "command", "command": command, "success": True})
+                        content = [
+                            f"Command: {command}",
+                            f"Status:  Running in background",
+                            f"Process: {process_id} (PID: {pid})",
+                            f"Tip:     Use /ct {process_id} to terminate",
+                        ]
+                        box = self._format_tool_box(
+                            "TOOL: command_runner (background)", content
+                        )
+                        yield box
+                        tool_results.append(
+                            {"type": "command", "command": command, "success": True}
+                        )
                     else:
-                        stdout = result.data.get("stdout", "") if isinstance(result.data, dict) else str(result.data)
-                        stderr = result.data.get("stderr", "") if isinstance(result.data, dict) else ""
-                        
+                        stdout = (
+                            result.data.get("stdout", "")
+                            if isinstance(result.data, dict)
+                            else str(result.data)
+                        )
+                        stderr = (
+                            result.data.get("stderr", "")
+                            if isinstance(result.data, dict)
+                            else ""
+                        )
+
                         full_output = stdout
                         if stderr and stderr.strip():
                             full_output += f"\n[stderr]\n{stderr}"
-                        
+
                         display_output = full_output
                         if len(full_output) > 10000:
-                            display_output = full_output[:10000] + f"\n\n... [Output truncated]"
-                        
-                        yield f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{display_output}\n```\n"
-                        tool_results.append({"type": "command", "command": command, "output": full_output, "success": True})
+                            display_output = (
+                                full_output[:10000] + f"\n\n... [Output truncated]"
+                            )
+
+                        # Show output preview in the box
+                        content = [f"Command: {command}", "", "Output:"]
+                        # Add first few lines of output to box
+                        output_lines = display_output.split("\n")[:10]
+                        for line in output_lines:
+                            content.append(line[:57])  # Truncate long lines
+                        if len(display_output.split("\n")) > 10:
+                            content.append("...")
+
+                        box = self._format_tool_box("TOOL: command_runner", content)
+                        yield box
+
+                        # Add to tool results with output for continuation
+                        tool_results.append(
+                            {
+                                "type": "command",
+                                "command": command,
+                                "output": full_output,
+                                "success": True,
+                            }
+                        )
                 else:
-                    yield f"\n❌ **Command Error:** {result.error}\n"
-                    tool_results.append({"type": "error", "error": result.error, "success": False})
+                    content = [str(result.error)]
+                    box = self._format_tool_box("ERROR: command_runner", content)
+                    yield box
+                    tool_results.append(
+                        {"type": "error", "error": result.error, "success": False}
+                    )
 
             elif tool_name == "file_operations":
                 file_path = args.get("file_path")
                 if file_path and project_path:
                     from pathlib import Path
+
                     path = Path(file_path)
                     if not path.is_absolute():
                         args["file_path"] = str(Path(project_path) / file_path)
@@ -1007,50 +1153,141 @@ class AIEngine:
                 result = await self.tool_registry.execute_tool(
                     "file_operations", user_id="ai_engine", **args
                 )
-                
+
                 if result.success:
                     operation = args.get("operation")
                     file_path = args.get("file_path")
-                    yield f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n"
-                    tool_results.append({"type": "file_op", "operation": operation, "success": True})
+                    content = [f"Operation: {operation}", f"File:      {file_path}"]
+
+                    # Show diff for write/edit operations inside the box
+                    if isinstance(result.data, dict):
+                        old_content = result.data.get("old_content")
+                        new_content = result.data.get("new_content")
+                        if old_content is not None and new_content is not None:
+                            # Generate unified diff
+                            import difflib
+
+                            old_lines = old_content.splitlines(keepends=True)
+                            new_lines = new_content.splitlines(keepends=True)
+                            diff = difflib.unified_diff(
+                                old_lines,
+                                new_lines,
+                                lineterm="",
+                                fromfile="before",
+                                tofile="after",
+                                n=3,
+                            )
+
+                            content.append("")
+                            content.append("Diff:")
+                            for line in diff:
+                                line = line.rstrip()
+                                # Skip file markers
+                                if line.startswith("---") or line.startswith("+++"):
+                                    continue
+                                # Only show + and - signs for diff lines, no colors
+                                content.append(line)
+
+                    box = self._format_tool_box("TOOL: file_operations", content)
+                    yield box
+
+                    # Add to tool results with output for continuation
+                    result_info = {
+                        "type": "file_op",
+                        "operation": operation,
+                        "file_path": file_path,
+                        "success": True,
+                    }
+                    if isinstance(result.data, dict) and "old_content" in result.data:
+                        result_info["modified"] = True
+                    tool_results.append(result_info)
                 else:
-                    yield f"\n❌ **File Error:** {result.error}\n"
-                    tool_results.append({"type": "error", "error": result.error, "success": False})
+                    content = [str(result.error)]
+                    box = self._format_tool_box("ERROR: file_operations", content)
+                    yield box
+                    tool_results.append(
+                        {"type": "error", "error": result.error, "success": False}
+                    )
 
             elif tool_name == "web_search":
                 result = await self.tool_registry.execute_tool(
                     "web_search", user_id="ai_engine", **args
                 )
-                
+
                 if result.success:
                     operation = args.get("operation", "search_web")
-                    yield f"\n✅ **Tool Used:** web_search ({operation})\n"
-                    tool_results.append({"type": "web_search", "operation": operation, "success": True})
+                    query = args.get("query", "N/A")
+                    content = [f"Operation: {operation}", f"Query:     {query}"]
+                    box = self._format_tool_box("TOOL: web_search", content)
+                    yield box
+                    tool_results.append(
+                        {"type": "web_search", "operation": operation, "success": True}
+                    )
                 else:
-                    yield f"\n❌ **Web Search Error:** {result.error}\n"
-                    tool_results.append({"type": "error", "error": result.error, "success": False})
+                    content = [str(result.error)]
+                    box = self._format_tool_box("ERROR: web_search", content)
+                    yield box
+                    tool_results.append(
+                        {"type": "error", "error": result.error, "success": False}
+                    )
 
             elif tool_name == "file_reader":
                 result = await self.tool_registry.execute_tool(
                     "file_reader", user_id="ai_engine", **args
                 )
-                
+
                 if result.success:
                     operation = args.get("operation")
-                    yield f"\n✅ **Tool Used:** file_reader ({operation})\n"
-                    tool_results.append({"type": "file_read", "operation": operation, "success": True})
+                    file_path = args.get("file_path", "N/A")
+
+                    # Show file content preview for read operations
+                    content = [f"Operation: {operation}", f"File:      {file_path}"]
+
+                    # Add preview of content
+                    if isinstance(result.data, dict) and "content" in result.data:
+                        file_content = result.data["content"]
+                        lines = file_content.split("\n")[:5]  # First 5 lines
+                        if lines:
+                            content.append("")
+                            content.append("Content (first 5 lines):")
+                            for line in lines:
+                                content.append(line[:57])  # Truncate long lines
+                            if len(file_content.split("\n")) > 5:
+                                content.append("...")
+
+                    box = self._format_tool_box("TOOL: file_reader", content)
+                    yield box
+
+                    # Add to tool results with content for continuation
+                    result_info = {
+                        "type": "file_read",
+                        "operation": operation,
+                        "file_path": file_path,
+                        "success": True,
+                    }
+                    if isinstance(result.data, dict) and "content" in result.data:
+                        result_info["content_preview"] = result.data["content"][
+                            :500
+                        ]  # First 500 chars
+                    tool_results.append(result_info)
                 else:
-                    yield f"\n❌ **File Reader Error:** {result.error}\n"
-                    tool_results.append({"type": "error", "error": result.error, "success": False})
+                    content = [str(result.error)]
+                    box = self._format_tool_box("ERROR: file_reader", content)
+                    yield box
+                    tool_results.append(
+                        {"type": "error", "error": result.error, "success": False}
+                    )
 
         except Exception as e:
-            yield f"\n❌ **Tool Error:** {str(e)}\n"
+            content = [str(e)]
+            box = self._format_tool_box("TOOL ERROR", content)
+            yield box
             tool_results.append({"type": "error", "error": str(e), "success": False})
 
     def _parse_alternative_tool_calls(self, response: str):
         """Parse tool calls from alternative formats (e.g., GPT-OSS with special tokens)"""
-        import re
         import json
+        import re
 
         tool_calls = []
 
@@ -1106,27 +1343,27 @@ class AIEngine:
     def _clean_model_syntax(self, text: str) -> str:
         """Remove model-specific syntax tokens from response"""
         import re
-        
+
         # Remove common model-specific tokens
         patterns = [
-            r'<\|start\|>',
-            r'<\|end\|>',
-            r'<\|channel\|>',
-            r'<\|message\|>',
-            r'<\|call\|>',
-            r'<\|calls\|>',
-            r'assistant\s+to=\w+\s+code',
-            r'analysis\s+to=\w+\s+code',
-            r'<\|[^|]+\|>',  # Any other pipe-delimited tokens
+            r"<\|start\|>",
+            r"<\|end\|>",
+            r"<\|channel\|>",
+            r"<\|message\|>",
+            r"<\|call\|>",
+            r"<\|calls\|>",
+            r"assistant\s+to=\w+\s+code",
+            r"analysis\s+to=\w+\s+code",
+            r"<\|[^|]+\|>",  # Any other pipe-delimited tokens
         ]
-        
+
         cleaned = text
         for pattern in patterns:
-            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
-        
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+
         # Remove multiple consecutive newlines left by token removal
-        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-        
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
         return cleaned.strip()
 
     async def _process_response_with_tools(
@@ -1140,18 +1377,20 @@ class AIEngine:
         recursion_depth: int = 0,
     ):
         """Process response and execute tools with AI continuation"""
-        import re
         import json
+        import re
 
         # Clean model-specific syntax tokens from response
         response = self._clean_model_syntax(response)
 
         # Limit recursion to prevent infinite loops
-        MAX_RECURSION_DEPTH = 999999  # Effectively unlimited - AI will continue until task is complete
+        MAX_RECURSION_DEPTH = (
+            999999  # Effectively unlimited - AI will continue until task is complete
+        )
         if recursion_depth >= MAX_RECURSION_DEPTH:
             # Silently stop recursion without warning
             yield response
-            yield "\n\n⚠️ **Maximum continuation depth reached. Please continue manually if needed.**\n"
+            yield "\n\n**WARNING:** Maximum continuation depth reached. Please continue manually if needed.\n"
             return
 
         # Find JSON tool calls in the response (standard format)
@@ -1202,8 +1441,10 @@ class AIEngine:
                     operation = args.get("operation", "end_response")
                     if operation == "end_response":
                         should_end_response = True
-                        yield "\n✅ **Response Completed**\n"
-                        tool_results.append({"type": "control", "message": "end_response"})
+                        yield "\n**SUCCESS:** Response Completed\n"
+                        tool_results.append(
+                            {"type": "control", "message": "end_response"}
+                        )
                     continue
 
                 # Mark that we've executed tools
@@ -1223,20 +1464,22 @@ class AIEngine:
                     if result.success:
                         command = args.get("command", "unknown")
                         operation = cmd_args.get("operation", "run_command")
-                        
+
                         # Check if this is an async command
                         if operation == "run_async_command":
                             # Background command - show process ID
                             process_id = result.data.get("process_id", "unknown")
                             pid = result.data.get("pid", "unknown")
-                            display_msg = f"\n✅ **Tool Used:** command_runner (background)\n⚡ **Command:** {command}\n🔄 **Status:** Running in background\n📋 **Process ID:** {process_id} (PID: {pid})\n💡 **Tip:** Use `/ct {process_id}` to terminate this process\n"
+                            display_msg = f"\n**SUCCESS:** Tool Used: command_runner (background)\n**Command:** {command}\n**Status:** Running in background\n**Process ID:** {process_id} (PID: {pid})\n**INFO:** Use `/ct {process_id}` to terminate this process\n"
                             yield display_msg
-                            tool_results.append({
-                                "type": "command",
-                                "command": command,
-                                "output": f"Background process started: {process_id}",
-                                "success": True
-                            })
+                            tool_results.append(
+                                {
+                                    "type": "command",
+                                    "command": command,
+                                    "output": f"Background process started: {process_id}",
+                                    "success": True,
+                                }
+                            )
                         else:
                             # Synchronous command - show output
                             stdout = (
@@ -1244,34 +1487,41 @@ class AIEngine:
                                 if isinstance(result.data, dict)
                                 else str(result.data)
                             )
-                            stderr = result.data.get("stderr", "") if isinstance(result.data, dict) else ""
-                            
+                            stderr = (
+                                result.data.get("stderr", "")
+                                if isinstance(result.data, dict)
+                                else ""
+                            )
+
                             # Combine stdout and stderr for full output
                             full_output = stdout
                             if stderr and stderr.strip():
                                 full_output += f"\n[stderr]\n{stderr}"
-                            
+
                             # Truncate very long outputs for display (but keep full output in data)
                             display_output = full_output
                             if len(full_output) > 10000:
-                                display_output = full_output[:10000] + f"\n\n... [Output truncated - {len(full_output)} total characters]"
-                            
-                            display_msg = f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{display_output}\n```\n"
+                                display_output = (
+                                    full_output[:10000]
+                                    + f"\n\n... [Output truncated - {len(full_output)} total characters]"
+                                )
+
+                            display_msg = f"\n**SUCCESS:** Tool Used: command_runner\n**Command:** {command}\n**Output:**\n```\n{display_output}\n```\n"
                             yield display_msg
-                            tool_results.append({
-                                "type": "command",
-                                "command": command,
-                                "output": full_output,
-                                "success": True
-                            })
+                            tool_results.append(
+                                {
+                                    "type": "command",
+                                    "command": command,
+                                    "output": full_output,
+                                    "success": True,
+                                }
+                            )
                     else:
-                        error_msg = f"\n❌ **Command Error:** {result.error}\n"
+                        error_msg = f"\n**ERROR:** Command Error: {result.error}\n"
                         yield error_msg
-                        tool_results.append({
-                            "type": "error",
-                            "error": result.error,
-                            "success": False
-                        })
+                        tool_results.append(
+                            {"type": "error", "error": result.error, "success": False}
+                        )
 
                 elif tool_name == "file_operations":
                     # Prepend project_path to relative file paths
@@ -1314,14 +1564,39 @@ class AIEngine:
                                 total = result.data.get("total_lines", 0)
                                 line_info = f" (lines {start}-{end} of {total})"
 
-                            display_msg = f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n📄 **Result:**\n```\n{display_content}\n```\n"
-                            yield display_msg
-                            tool_results.append({
-                                "type": "file_read",
-                                "file_path": file_path,
-                                "content": content,
-                                "success": True
-                            })
+                            # Prepare content for the tool box
+                            box_content = [
+                                f"Operation: {operation}{line_info}",
+                                f"File:      {file_path}",
+                            ]
+
+                            # Add content preview to the box
+                            if display_content.strip():
+                                box_content.append("")
+                                box_content.append("Content Preview:")
+                                # Add content lines to the box, truncating long lines
+                                content_lines = display_content.split("\n")[
+                                    :10
+                                ]  # Limit lines
+                                for line in content_lines:
+                                    # Truncate long lines to fit the box width (65 chars - padding)
+                                    truncated_line = line[:57]
+                                    box_content.append(truncated_line)
+                                if len(display_content.split("\n")) > 10:
+                                    box_content.append("...")
+
+                            box = self._format_tool_box(
+                                "TOOL: file_operations", box_content
+                            )
+                            yield box
+                            tool_results.append(
+                                {
+                                    "type": "file_read",
+                                    "file_path": file_path,
+                                    "content": content,
+                                    "success": True,
+                                }
+                            )
                         elif operation == "write_file_lines":
                             # Show line range info for write_file_lines
                             line_info = ""
@@ -1330,17 +1605,31 @@ class AIEngine:
                                 end = result.data.get("end_line", 1)
                                 lines_written = result.data.get("lines_written", 0)
                                 line_info = f" (lines {start}-{end}, {lines_written} lines written)"
-                            display_msg = f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}{line_info}\n"
+                            display_msg = f"\n**SUCCESS:** Tool Used: file_operations\n**Operation:** {operation} on {file_path}{line_info}\n"
                             yield display_msg
-                            tool_results.append({"type": "file_op", "operation": operation, "success": True})
+                            tool_results.append(
+                                {
+                                    "type": "file_op",
+                                    "operation": operation,
+                                    "success": True,
+                                }
+                            )
                         else:
-                            display_msg = f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n"
+                            display_msg = f"\n**SUCCESS:** Tool Used: file_operations\n**Operation:** {operation} on {file_path}\n"
                             yield display_msg
-                            tool_results.append({"type": "file_op", "operation": operation, "success": True})
+                            tool_results.append(
+                                {
+                                    "type": "file_op",
+                                    "operation": operation,
+                                    "success": True,
+                                }
+                            )
                     else:
-                        error_msg = f"\n❌ **File Error:** {result.error}\n"
+                        error_msg = f"\n**ERROR:** File Error: {result.error}\n"
                         yield error_msg
-                        tool_results.append({"type": "error", "error": result.error, "success": False})
+                        tool_results.append(
+                            {"type": "error", "error": result.error, "success": False}
+                        )
 
                 elif tool_name == "web_search":
                     operation = args.get("operation", "search_web")
@@ -1353,7 +1642,7 @@ class AIEngine:
                         if operation == "search_web":
                             query = args.get("query", "unknown")
                             search_results = result.data if result.data else []
-                            result_text = f"\n✅ **Tool Used:** web_search\n🔍 **Query:** {query}\n\n**Search Results:**\n"
+                            result_text = f"\n**SUCCESS:** Tool Used: web_search\n**Query:** {query}\n\n**Search Results:**\n"
                             for idx, item in enumerate(search_results[:5], 1):
                                 result_text += (
                                     f"\n{idx}. **{item.get('title', 'No title')}**\n"
@@ -1364,12 +1653,14 @@ class AIEngine:
                                 result_text += f"   🔗 {item.get('url', 'No URL')}\n"
 
                             yield result_text
-                            tool_results.append({
-                                "type": "web_search",
-                                "query": query,
-                                "results": search_results,
-                                "success": True
-                            })
+                            tool_results.append(
+                                {
+                                    "type": "web_search",
+                                    "query": query,
+                                    "results": search_results,
+                                    "success": True,
+                                }
+                            )
 
                         elif operation == "fetch_url_content":
                             url = args.get("url", "unknown")
@@ -1387,28 +1678,35 @@ class AIEngine:
                                     + f"\n\n... (truncated, total length: {len(content)} characters)"
                                 )
 
-                            result_text = (
-                                f"\n✅ **Tool Used:** web_search (fetch_url_content)\n"
-                            )
-                            result_text += f"🌐 **URL:** {url}\n"
-                            result_text += f"📄 **Title:** {title}\n"
-                            result_text += f"📝 **Content Type:** {content_type}\n\n"
+                            result_text = f"\n**SUCCESS:** Tool Used: web_search (fetch_url_content)\n"
+                            result_text += f"**URL:** {url}\n"
+                            result_text += f"**Title:** {title}\n"
+                            result_text += f"**Content Type:** {content_type}\n\n"
                             result_text += (
                                 f"**Content:**\n```\n{display_content}\n```\n"
                             )
 
                             yield result_text
-                            tool_results.append({"type": "web_fetch", "url": url, "content": content, "success": True})
+                            tool_results.append(
+                                {
+                                    "type": "web_fetch",
+                                    "url": url,
+                                    "content": content,
+                                    "success": True,
+                                }
+                            )
 
                         elif operation == "parse_documentation":
                             url = args.get("url", "unknown")
                             doc_data = result.data if result.data else {}
-                            result_text = f"\n✅ **Tool Used:** web_search (parse_documentation)\n"
-                            result_text += f"🌐 **URL:** {url}\n"
+                            result_text = f"\n**SUCCESS:** Tool Used: web_search (parse_documentation)\n"
+                            result_text += f"**URL:** {url}\n"
                             result_text += (
-                                f"📄 **Title:** {doc_data.get('title', 'No title')}\n"
+                                f"**Title:** {doc_data.get('title', 'No title')}\n"
                             )
-                            result_text += f"📚 **Type:** {doc_data.get('doc_type', 'unknown')}\n\n"
+                            result_text += (
+                                f"**Type:** {doc_data.get('doc_type', 'unknown')}\n\n"
+                            )
 
                             sections = doc_data.get("sections", [])
                             if sections:
@@ -1419,91 +1717,121 @@ class AIEngine:
                                     )
 
                             yield result_text
-                            tool_results.append({"type": "web_docs", "url": url, "doc_data": doc_data, "success": True})
+                            tool_results.append(
+                                {
+                                    "type": "web_docs",
+                                    "url": url,
+                                    "doc_data": doc_data,
+                                    "success": True,
+                                }
+                            )
 
                         elif operation == "get_api_docs":
                             api_name = args.get("api_name", "unknown")
                             api_data = result.data if result.data else {}
                             if api_data.get("found", True):
-                                result_text = (
-                                    f"\n✅ **Tool Used:** web_search (get_api_docs)\n"
-                                )
-                                result_text += f"📚 **API:** {api_name}\n"
-                                result_text += f"📄 **Title:** {api_data.get('title', 'API Documentation')}\n"
+                                result_text = f"\n**SUCCESS:** Tool Used: web_search (get_api_docs)\n"
+                                result_text += f"**API:** {api_name}\n"
+                                result_text += f"**Title:** {api_data.get('title', 'API Documentation')}\n"
                             else:
-                                result_text = (
-                                    f"\n⚠️ **Tool Used:** web_search (get_api_docs)\n"
-                                )
-                                result_text += f"📚 **API:** {api_name}\n"
-                                result_text += f"❌ {api_data.get('message', 'Documentation not found')}\n"
+                                result_text = f"\n**WARNING:** Tool Used: web_search (get_api_docs)\n"
+                                result_text += f"**API:** {api_name}\n"
+                                result_text += f"**ERROR:** {api_data.get('message', 'Documentation not found')}\n"
 
                             yield result_text
-                            tool_results.append({"type": "web_api_docs", "api_name": api_name, "api_data": api_data, "success": True})
+                            tool_results.append(
+                                {
+                                    "type": "web_api_docs",
+                                    "api_name": api_name,
+                                    "api_data": api_data,
+                                    "success": True,
+                                }
+                            )
                         else:
-                            display_msg = f"\n✅ **Tool Used:** web_search ({operation})\n"
+                            display_msg = (
+                                f"\n**SUCCESS:** Tool Used: web_search ({operation})\n"
+                            )
                             yield display_msg
-                            tool_results.append({"type": "web_search", "operation": operation, "success": True})
+                            tool_results.append(
+                                {
+                                    "type": "web_search",
+                                    "operation": operation,
+                                    "success": True,
+                                }
+                            )
                     else:
-                        error_msg = f"\n❌ **Web Search Error:** {result.error}\n"
+                        error_msg = f"\n**ERROR:** Web Search Error: {result.error}\n"
                         yield error_msg
-                        tool_results.append({"type": "error", "error": result.error, "success": False})
+                        tool_results.append(
+                            {"type": "error", "error": result.error, "success": False}
+                        )
 
             except json.JSONDecodeError as e:
-                error_msg = f"\n❌ **JSON Parse Error:** {str(e)}\n"
+                error_msg = f"\n**ERROR:** JSON Parse Error: {str(e)}\n"
                 yield error_msg
-                tool_results.append({"type": "error", "error": str(e), "success": False})
+                tool_results.append(
+                    {"type": "error", "error": str(e), "success": False}
+                )
             except Exception as e:
-                error_msg = f"\n❌ **Tool Error:** {str(e)}\n"
+                error_msg = f"\n**ERROR:** Tool Error: {str(e)}\n"
                 yield error_msg
-                tool_results.append({"type": "error", "error": str(e), "success": False})
+                tool_results.append(
+                    {"type": "error", "error": str(e), "success": False}
+                )
 
         # Tool results have already been yielded immediately during execution
         # Now check if we should continue or end
-        
+
         # Check if we should end the response (end_response tool was called)
         if should_end_response:
             return
 
         # Use auto-continuation manager to determine if we should continue
-        if has_executed_tools and self.auto_continuation.should_continue(tool_results, should_end_response) and recursion_depth < MAX_RECURSION_DEPTH:
-                # Show continuation indicator
-                yield "\n🔄 **Auto-continuing...**\n"
-                
-                # Generate continuation response using auto-continuation manager
-                final_response = await self.auto_continuation.generate_continuation(
-                    ai_provider=ai_provider,
-                    messages=messages,
-                    tool_results=tool_results,
-                    model=model,
-                    config=config
-                )
+        if (
+            has_executed_tools
+            and self.auto_continuation.should_continue(
+                tool_results, should_end_response
+            )
+            and recursion_depth < MAX_RECURSION_DEPTH
+        ):
+            # Show continuation indicator
+            yield "... \n"
 
-                # Clean model-specific syntax from continuation response
-                final_response = self._clean_model_syntax(final_response)
+            # Generate continuation response using auto-continuation manager
+            final_response = await self.auto_continuation.generate_continuation(
+                ai_provider=ai_provider,
+                messages=messages,
+                tool_results=tool_results,
+                model=model,
+                config=config,
+            )
 
-                # Check if continuation response contains tool calls
-                if self._contains_tool_calls(final_response):
-                    # Extract and yield any text before the first tool call
-                    tool_call_start = final_response.find('```json')
-                    if tool_call_start > 0:
-                        text_before_tools = final_response[:tool_call_start].strip()
-                        if text_before_tools:
-                            yield f"\n{text_before_tools}\n"
-                    
-                    # Recursively process the continuation response with tools
-                    async for chunk in self._process_response_with_tools(
-                        final_response,
-                        project_path,
-                        messages,
-                        ai_provider,
-                        model,
-                        config,
-                        recursion_depth + 1,
-                    ):
-                        yield chunk
-                else:
-                    # No tool calls in continuation, just yield the response
-                    yield f"\n{final_response}"
+            # Clean model-specific syntax from continuation response
+            final_response = self._clean_model_syntax(final_response)
+
+            # Check if continuation response contains tool calls
+            if self._contains_tool_calls(final_response):
+                # Extract and yield any text before the first tool call
+                tool_call_start = final_response.find("```json")
+                if tool_call_start > 0:
+                    text_before_tools = final_response[:tool_call_start].strip()
+                    if text_before_tools:
+                        yield f"\n{text_before_tools}\n"
+
+                # Recursively process the continuation response with tools
+                async for chunk in self._process_response_with_tools(
+                    final_response,
+                    project_path,
+                    messages,
+                    ai_provider,
+                    model,
+                    config,
+                    recursion_depth + 1,
+                ):
+                    yield chunk
+            else:
+                # No tool calls in continuation, just yield the response
+                yield f"\n{final_response}"
         else:
             # No tools, just yield the original response
             yield response
@@ -1542,9 +1870,9 @@ class AIEngine:
                             if isinstance(result.data, dict)
                             else str(result.data)
                         )
-                        yield f"\n✅ **Tool Used:** command_runner\n⚡ **Command:** {command}\n📄 **Output:**\n```\n{output}\n```\n"
+                        yield f"\n**SUCCESS:** Tool Used: command_runner\n**Command:** {command}\n**Output:**\n```\n{output}\n```\n"
                     else:
-                        yield f"\n❌ **Command Error:** {result.error}\n"
+                        yield f"\n**ERROR:** Command Error: {result.error}\n"
 
                 elif tool_name == "file_operations":
                     # Handle file operations
@@ -1570,37 +1898,74 @@ class AIEngine:
                                 if isinstance(result.data, dict)
                                 else str(result.data)
                             )
-                            yield f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n📄 **Result:**\n```\n{content}\n```\n"
+                            # Truncate very long content for display
+                            display_content = content
+                            if len(content) > 5000:
+                                display_content = (
+                                    content[:5000]
+                                    + f"\n...[{len(content) - 5000} more characters truncated]"
+                                )
+
+                            # Prepare content for the tool box
+                            box_content = [
+                                f"Operation: {operation}",
+                                f"File:      {file_path}",
+                            ]
+
+                            # Add content preview to the box
+                            if display_content.strip():
+                                box_content.append("")
+                                box_content.append("Content Preview:")
+                                # Add content lines to the box, truncating long lines
+                                content_lines = display_content.split("\n")[
+                                    :10
+                                ]  # Limit lines
+                                for line in content_lines:
+                                    # Truncate long lines to fit the box width (65 chars - padding)
+                                    truncated_line = line[:57]
+                                    box_content.append(truncated_line)
+                                if len(display_content.split("\n")) > 10:
+                                    box_content.append("...")
+
+                            box = self._format_tool_box(
+                                "TOOL: file_operations", box_content
+                            )
+                            yield box
                         else:
-                            yield f"\n✅ **Tool Used:** file_operations\n📄 **Operation:** {operation} on {file_path}\n"
+                            yield f"\n**SUCCESS:** Tool Used: file_operations\n**Operation:** {operation} on {file_path}\n"
                     else:
-                        yield f"\n❌ **File Error:** {result.error}\n"
+                        yield f"\n**ERROR:** File Error: {result.error}\n"
 
             except json.JSONDecodeError as e:
-                yield f"\n❌ **JSON Parse Error:** {str(e)}\n"
+                yield f"\n**ERROR:** JSON Parse Error: {str(e)}\n"
             except Exception as e:
-                yield f"\n❌ **Tool Error:** {str(e)}\n"
+                yield f"\n**ERROR:** Tool Error: {str(e)}\n"
 
     def _build_system_prompt(self, project_path: str = None) -> str:
         """Build system prompt for the AI"""
-        
+
         # Load user-defined rules FIRST (highest priority)
         from .rules import RulesManager
+
         rules_manager = RulesManager()
         rules_text = rules_manager.get_rules_for_ai(project_path)
-        
+
         prompt = ""
-        
+
         # Add rules at the very beginning if they exist
         if rules_text:
-            prompt += "="*80 + "\n"
-            prompt += "USER-DEFINED RULES (HIGHEST PRIORITY - MUST FOLLOW ABOVE ALL ELSE):\n"
-            prompt += "="*80 + "\n"
+            prompt += "=" * 80 + "\n"
+            prompt += (
+                "USER-DEFINED RULES (HIGHEST PRIORITY - MUST FOLLOW ABOVE ALL ELSE):\n"
+            )
+            prompt += "=" * 80 + "\n"
             prompt += rules_text + "\n"
-            prompt += "="*80 + "\n"
-            prompt += "These rules OVERRIDE all other instructions. Follow them strictly.\n"
-            prompt += "="*80 + "\n\n"
-        
+            prompt += "=" * 80 + "\n"
+            prompt += (
+                "These rules OVERRIDE all other instructions. Follow them strictly.\n"
+            )
+            prompt += "=" * 80 + "\n\n"
+
         prompt += """You are Cognautic, an advanced AI coding assistant running inside the Cognautic CLI.
 
 IMPORTANT: You are operating within the Cognautic CLI environment. You can ONLY use the tools provided below. Do NOT suggest using external tools, IDEs, or commands that are not available in this CLI.
@@ -1627,6 +1992,8 @@ CRITICAL BEHAVIOR REQUIREMENTS:
   * There were errors that need to be handled
   * Otherwise, you MUST explicitly call end_response when done
 - NEVER RE-READ SAME FILE: If a file was truncated in the output, use read_file_lines to read the specific truncated section, DO NOT re-read the entire file
+- Never you ever return a empty response
+- Use end response tool ONLY when the task is done
 
 WORKSPACE EXPLORATION RULES (CRITICAL - ALWAYS CHECK FIRST):
 - ALWAYS start by listing directory contents to see what files exist in the current directory
@@ -1937,7 +2304,7 @@ The tools will execute automatically and show results. Keep explanatory text BRI
 
 Available tools:
 - file_operations: Create, read, write, delete files
-- file_reader: Read files, grep search, list directories  
+- file_reader: Read files, grep search, list directories
 - command_runner: Execute shell commands (use run_async_command for long tasks)
 - web_search: Search the web for information
 - response_control: Use end_response when task is complete
@@ -1985,21 +2352,21 @@ When a user asks you to "build/create a [project type] app/project", you MUST co
    - Create directory structure
    - Create ALL source files (components, styles, logic, etc.)
    - Create configuration files
-   
+
 ✅ STEP 3: Create package.json/requirements.txt (CRITICAL - DON'T SKIP!)
    For JavaScript/Node.js/React projects:
    - Create package.json with correct dependencies and versions
    - Include proper scripts (start, build, test, dev)
    - Add project metadata (name, version, description)
-   
+
    For Python projects:
    - Create requirements.txt with all dependencies
    - Include version constraints where appropriate
-   
+
 ✅ STEP 4: Install Dependencies (CRITICAL - DON'T SKIP!)
    - Tell the user to run npm install (or yarn install) for JavaScript projects
    - Tell the user to run pip install -r requirements.txt for Python projects
-   
+
 ✅ STEP 5: Explanation
    - Provide clear instructions to user
 
@@ -2068,43 +2435,11 @@ REMEMBER: The project is NOT complete until dependencies are installed and it's 
 📊 SHOWING DIFFS AND FILE PREVIEWS
 ═══════════════════════════════════════════════════════════════════════════════
 
-When creating or modifying files, provide helpful context:
-
-FOR NEW FILES:
-- Show a preview of the file content (first 10-15 lines)
-- Indicate total line count
-- Mention key features or sections
-
-FOR MODIFIED FILES:
-- Show what changed (before/after snippets)
-- Highlight the specific lines modified
-- Explain why the change was made
-
-EXAMPLE OUTPUT FORMAT:
-✨ **File Created:** src/App.js
-📄 **Preview:**
-```javascript
-import React from 'react';
-import './App.css';
-
-function App() {
-  return (
-    <div className="App">
-      <h1>Welcome to My App</h1>
-    </div>
-  );
-}
-... (15 more lines)
-```
-📊 Total: 23 lines
-
-💾 **File Modified:** src/styles.css
-📝 **Changes:**
-- Line 5-8: Changed background color from white to dark theme
-- Line 12: Updated font size from 14px to 16px
-- Added: New dark mode variables (lines 20-25)
-
-This helps users understand what you've done without overwhelming them with full file contents.
+When creating or modifying files:
+- The tool execution will show the operation and file path
+- For file modifications, a diff will be automatically displayed
+- Do NOT manually show file previews or content in your response
+- Focus on explaining what you did and why
 """
 
         # Add OS information to help AI use correct commands
@@ -2145,8 +2480,8 @@ This helps users understand what you've done without overwhelming them with full
 
     async def _execute_tools(self, response: str, project_path: str = None) -> str:
         """Execute tools mentioned in the response"""
-        import re
         import json
+        import re
 
         # Find JSON tool calls in the response
         json_pattern = r"```json\s*(\{[^`]+\})\s*```"
@@ -2179,11 +2514,11 @@ This helps users understand what you've done without overwhelming them with full
                         if result.success:
                             command = args.get("command", "unknown")
                             results.append(
-                                f"✅ **Tool Used:** command_runner\n⚡ **Command Executed:** {command}"
+                                f"**SUCCESS:** Tool Used: command_runner\n**Command Executed:** {command}"
                             )
                         else:
                             results.append(
-                                f"❌ **Tool Error:** command_runner - {result.error}"
+                                f"**ERROR:** Tool Error: command_runner - {result.error}"
                             )
 
                 elif tool_name == "file_operations":
@@ -2203,35 +2538,11 @@ This helps users understand what you've done without overwhelming them with full
                             "file_operations", user_id="ai_engine", **args
                         )
                         if result.success:
-                            # Format file operation results concisely
-                            if operation == "create_file":
-                                file_path = args.get("file_path", "unknown")
-                                results.append(
-                                    f"✅ **Tool Used:** file_operations\n📄 **File Created:** {file_path}"
-                                )
-                            elif operation == "write_file":
-                                file_path = args.get("file_path", "unknown")
-                                results.append(
-                                    f"✅ **Tool Used:** file_operations\n📝 **File Edited:** {file_path}"
-                                )
-                            elif operation == "list_directory":
-                                dir_path = args.get("dir_path", "unknown")
-                                file_count = (
-                                    len(result.data)
-                                    if isinstance(result.data, list)
-                                    else 0
-                                )
-                                results.append(
-                                    f"✅ **Tool Used:** file_operations\n📁 **Directory Listed:** {dir_path} ({file_count} items)"
-                                )
-                            else:
-                                results.append(
-                                    f"✅ **Tool Used:** file_operations ({operation})"
-                                )
+                            # File operations are shown via live tool execution
+                            # No need to append results here for streaming mode
+                            pass
                         else:
-                            results.append(
-                                f"❌ **Tool Error:** file_operations - {result.error}"
-                            )
+                            results.append(f"ERROR: file_operations - {result.error}")
 
                 elif tool_name == "web_search":
                     operation = args.get("operation", "search_web")
@@ -2244,7 +2555,7 @@ This helps users understand what you've done without overwhelming them with full
                         if operation == "search_web":
                             query = args.get("query", "unknown")
                             search_results = result.data if result.data else []
-                            result_text = f"✅ **Tool Used:** web_search\n🔍 **Query:** {query}\n\n**Search Results:**\n"
+                            result_text = f"**SUCCESS:** Tool Used: web_search\n**Query:** {query}\n\n**Search Results:**\n"
                             for idx, item in enumerate(search_results[:5], 1):
                                 result_text += (
                                     f"\n{idx}. **{item.get('title', 'No title')}**\n"
@@ -2270,26 +2581,24 @@ This helps users understand what you've done without overwhelming them with full
                                     + f"\n\n... (truncated, total length: {len(content)} characters)"
                                 )
 
-                            result_text = (
-                                f"✅ **Tool Used:** web_search (fetch_url_content)\n"
-                            )
-                            result_text += f"🌐 **URL:** {url}\n"
-                            result_text += f"📄 **Title:** {title}\n"
-                            result_text += f"📝 **Content Type:** {content_type}\n\n"
+                            result_text = f"**SUCCESS:** Tool Used: web_search (fetch_url_content)\n"
+                            result_text += f"**URL:** {url}\n"
+                            result_text += f"**Title:** {title}\n"
+                            result_text += f"**Content Type:** {content_type}\n\n"
                             result_text += f"**Content:**\n{content}"
                             results.append(result_text)
 
                         elif operation == "parse_documentation":
                             url = args.get("url", "unknown")
                             doc_data = result.data if result.data else {}
-                            result_text = (
-                                f"✅ **Tool Used:** web_search (parse_documentation)\n"
-                            )
-                            result_text += f"🌐 **URL:** {url}\n"
+                            result_text = f"**SUCCESS:** Tool Used: web_search (parse_documentation)\n"
+                            result_text += f"**URL:** {url}\n"
                             result_text += (
-                                f"📄 **Title:** {doc_data.get('title', 'No title')}\n"
+                                f"**Title:** {doc_data.get('title', 'No title')}\n"
                             )
-                            result_text += f"📚 **Type:** {doc_data.get('doc_type', 'unknown')}\n\n"
+                            result_text += (
+                                f"**Type:** {doc_data.get('doc_type', 'unknown')}\n\n"
+                            )
 
                             sections = doc_data.get("sections", [])
                             if sections:
@@ -2304,26 +2613,22 @@ This helps users understand what you've done without overwhelming them with full
                             api_name = args.get("api_name", "unknown")
                             api_data = result.data if result.data else {}
                             if api_data.get("found", True):
-                                result_text = (
-                                    f"✅ **Tool Used:** web_search (get_api_docs)\n"
-                                )
-                                result_text += f"📚 **API:** {api_name}\n"
-                                result_text += f"📄 **Title:** {api_data.get('title', 'API Documentation')}\n"
+                                result_text = f"**SUCCESS:** Tool Used: web_search (get_api_docs)\n"
+                                result_text += f"**API:** {api_name}\n"
+                                result_text += f"**Title:** {api_data.get('title', 'API Documentation')}\n"
                                 results.append(result_text)
                             else:
-                                result_text = (
-                                    f"⚠️ **Tool Used:** web_search (get_api_docs)\n"
-                                )
-                                result_text += f"📚 **API:** {api_name}\n"
-                                result_text += f"❌ {api_data.get('message', 'Documentation not found')}\n"
+                                result_text = f"**WARNING:** Tool Used: web_search (get_api_docs)\n"
+                                result_text += f"**API:** {api_name}\n"
+                                result_text += f"**ERROR:** {api_data.get('message', 'Documentation not found')}\n"
                                 results.append(result_text)
                         else:
                             results.append(
-                                f"✅ **Tool Used:** web_search ({operation})"
+                                f"**SUCCESS:** Tool Used: web_search ({operation})"
                             )
                     else:
                         results.append(
-                            f"❌ **Tool Error:** web_search - {result.error}"
+                            f"**ERROR:** Tool Error: web_search - {result.error}"
                         )
 
             except Exception as e:
