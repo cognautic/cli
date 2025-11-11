@@ -108,7 +108,7 @@ class MemoryManager:
         # Save initial session file
         self._save_session()
         
-        console.print(f"✅ Created new session: {session_id} - {title}", style="green")
+        
         return session_id
 
     def load_session(self, session_id: str) -> bool:

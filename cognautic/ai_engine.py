@@ -100,6 +100,24 @@ class OpenAIProvider(AIProvider):
         except Exception as e:
             raise Exception(f"OpenAI API error: {str(e)}")
 
+    async def generate_response_stream(
+        self, messages: List[Dict], model: str = "gpt-4", **kwargs
+    ):
+        """Generate streaming response"""
+        try:
+            stream = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=kwargs.get("max_tokens", 4096),
+                temperature=kwargs.get("temperature", 0.7),
+                stream=True,
+            )
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            raise Exception(f"OpenAI API streaming error: {str(e)}")
+
     def get_available_models(self) -> List[str]:
         return ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo", "gpt-4o", "gpt-4o-mini"]
 
@@ -143,6 +161,33 @@ class AnthropicProvider(AIProvider):
         except Exception as e:
             raise Exception(f"Anthropic API error: {str(e)}")
 
+    async def generate_response_stream(
+        self, messages: List[Dict], model: str = "claude-3-sonnet-20240229", **kwargs
+    ):
+        """Generate streaming response"""
+        try:
+            # Convert messages format for Anthropic
+            system_message = ""
+            user_messages = []
+
+            for msg in messages:
+                if msg["role"] == "system":
+                    system_message = msg["content"]
+                else:
+                    user_messages.append(msg)
+
+            async with self.client.messages.stream(
+                model=model,
+                max_tokens=kwargs.get("max_tokens", 4096),
+                temperature=kwargs.get("temperature", 0.7),
+                system=system_message,
+                messages=user_messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+        except Exception as e:
+            raise Exception(f"Anthropic API streaming error: {str(e)}")
+
     def get_available_models(self) -> List[str]:
         return [
             "claude-3-opus-20240229",
@@ -172,15 +217,15 @@ class GoogleProvider(AIProvider):
         try:
             model_instance = self.genai.GenerativeModel(model)
 
-            # Convert messages to Google format
+            # Convert messages to Google format with clear separators
             prompt = ""
             for msg in messages:
                 if msg["role"] == "system":
-                    prompt += f"System: {msg['content']}\n"
+                    prompt += f"System: {msg['content']}\n\n"
                 elif msg["role"] == "user":
-                    prompt += f"User: {msg['content']}\n"
+                    prompt += f"User: {msg['content']}\n\n"
                 elif msg["role"] == "assistant":
-                    prompt += f"Assistant: {msg['content']}\n"
+                    prompt += f"Assistant: {msg['content']}\n\n"
 
             response = await model_instance.generate_content_async(
                 prompt,
@@ -218,15 +263,15 @@ class GoogleProvider(AIProvider):
         try:
             model_instance = self.genai.GenerativeModel(model)
 
-            # Convert messages to Google format
+            # Convert messages to Google format with clear separators
             prompt = ""
             for msg in messages:
                 if msg["role"] == "system":
-                    prompt += f"System: {msg['content']}\n"
+                    prompt += f"System: {msg['content']}\n\n"
                 elif msg["role"] == "user":
-                    prompt += f"User: {msg['content']}\n"
+                    prompt += f"User: {msg['content']}\n\n"
                 elif msg["role"] == "assistant":
-                    prompt += f"Assistant: {msg['content']}\n"
+                    prompt += f"Assistant: {msg['content']}\n\n"
 
             response = model_instance.generate_content(
                 prompt,
@@ -237,15 +282,21 @@ class GoogleProvider(AIProvider):
                 stream=True,
             )
 
+            # Use asyncio to avoid blocking on synchronous iteration
+            import asyncio
+            
             for chunk in response:
                 try:
                     if hasattr(chunk, "text") and chunk.text:
                         yield chunk.text
+                        # Allow other async tasks to run
+                        await asyncio.sleep(0)
                     elif hasattr(chunk, "parts") and chunk.parts:
                         # Handle response with parts but no direct text
                         for part in chunk.parts:
                             if hasattr(part, "text") and part.text:
                                 yield part.text
+                                await asyncio.sleep(0)
                 except ValueError as ve:
                     # Handle the case where chunk.text is accessed but no valid parts exist
                     if "Invalid operation: The `response.text` quick accessor" in str(
@@ -293,6 +344,27 @@ class TogetherProvider(AIProvider):
         except Exception as e:
             raise Exception(f"Together API error: {str(e)}")
 
+    async def generate_response_stream(
+        self,
+        messages: List[Dict],
+        model: str = "meta-llama/Llama-2-70b-chat-hf",
+        **kwargs,
+    ):
+        """Generate streaming response"""
+        try:
+            stream = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=kwargs.get("max_tokens", 4096),
+                temperature=kwargs.get("temperature", 0.7),
+                stream=True,
+            )
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            raise Exception(f"Together API streaming error: {str(e)}")
+
     def get_available_models(self) -> List[str]:
         return [
             "meta-llama/Llama-2-70b-chat-hf",
@@ -329,6 +401,24 @@ class OpenRouterProvider(AIProvider):
             return response.choices[0].message.content
         except Exception as e:
             raise Exception(f"OpenRouter API error: {str(e)}")
+
+    async def generate_response_stream(
+        self, messages: List[Dict], model: str = "anthropic/claude-3-sonnet", **kwargs
+    ):
+        """Generate streaming response"""
+        try:
+            stream = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=kwargs.get("max_tokens", 4096),
+                temperature=kwargs.get("temperature", 0.7),
+                stream=True,
+            )
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            raise Exception(f"OpenRouter API streaming error: {str(e)}")
 
     def get_available_models(self) -> List[str]:
         return [
@@ -877,12 +967,21 @@ class AIEngine:
 
                 # Check for JSON block markers
                 if not in_json_block:
-                    # Look for start of JSON block
+                    # Look for start of JSON block (with code fence)
+                    # Match ```json even without newline (streaming might not have it yet)
                     json_start_match = re.search(
-                        r"```json\s*\n", buffer[yielded_length:]
+                        r"```json", buffer[yielded_length:]
                     )
+                    
+                    # Look for raw JSON blocks (without code fence) - for OpenRouter models
+                    # More flexible pattern that handles various formats
+                    raw_json_match = re.search(
+                        r'(?:json\s*)?\{\s*"(?:tool_code|tool)"\s*:\s*"[^"]+"\s*,\s*"args"\s*:\s*\{',
+                        buffer[yielded_length:]
+                    )
+                    
                     if json_start_match:
-                        # Found start of JSON block
+                        # Found start of JSON block with code fence
                         in_json_block = True
                         json_block_start = yielded_length + json_start_match.start()
 
@@ -893,47 +992,163 @@ class AIEngine:
                             if text_to_yield.strip():
                                 yield text_to_yield
                         yielded_length = json_block_start
-                    else:
-                        # No JSON block yet, yield new content (keep small buffer)
-                        if len(buffer) > yielded_length + 10:
-                            text_to_yield = buffer[yielded_length:-10]
+                    elif raw_json_match:
+                        # Found raw JSON block (OpenRouter format)
+                        in_json_block = True
+                        # Find the actual { character
+                        match_text = raw_json_match.group(0)
+                        json_start_in_match = match_text.rfind('{')
+                        json_block_start = yielded_length + raw_json_match.start() + json_start_in_match
+                        
+                        # Yield everything BEFORE the JSON block
+                        if json_block_start > yielded_length:
+                            text_to_yield = buffer[yielded_length:json_block_start]
                             text_to_yield = self._clean_model_syntax(text_to_yield)
-                            if text_to_yield:
+                            if text_to_yield.strip():
                                 yield text_to_yield
-                            yielded_length = len(buffer) - 10
+                        yielded_length = json_block_start
+                    else:
+                        # No JSON block yet
+                        # Don't yield if we might be about to see JSON - buffer a bit
+                        remaining = buffer[yielded_length:]
+                        
+                        # If the remaining text looks like it might be leading to JSON, don't yield yet
+                        # Check for partial JSON markers
+                        if remaining.endswith('`') or remaining.endswith('``') or remaining.endswith('```') or \
+                           remaining.endswith('```j') or remaining.endswith('```js') or remaining.endswith('```jso') or \
+                           remaining.endswith('{') or remaining.endswith('{"') or remaining.endswith('{"tool'):
+                            # Might be starting JSON, don't yield yet
+                            pass
+                        else:
+                            # Safe to yield - but leave last 10 chars in buffer in case JSON starts
+                            if len(remaining) > 10:
+                                text_to_yield = remaining[:-10]
+                                text_to_yield = self._clean_model_syntax(text_to_yield)
+                                if text_to_yield:
+                                    yield text_to_yield
+                                yielded_length = len(buffer) - 10
                 else:
                     # Inside JSON block, look for the end
-                    json_end_match = re.search(r"\n```", buffer[json_block_start:])
-                    if json_end_match:
-                        # Found end of JSON block
-                        json_block_end = json_block_start + json_end_match.end()
-
-                        # Extract the complete JSON block
-                        json_block = buffer[json_block_start:json_block_end]
-
-                        # Parse and execute the tool call immediately
-                        json_pattern = r"```json\s*\n(.*?)\n```"
-                        match = re.search(json_pattern, json_block, re.DOTALL)
-                        if match:
+                    # Check if this is a code-fenced block or raw JSON
+                    is_code_fenced = buffer[json_block_start:json_block_start+7] == "```json"
+                    
+                    if is_code_fenced:
+                        # Look for closing ``` - more flexible pattern
+                        json_end_match = re.search(r"[\r\n]+```", buffer[json_block_start:])
+                        if json_end_match:
+                            json_block_end = json_block_start + json_end_match.end()
+                            json_block = buffer[json_block_start:json_block_end]
+                            
+                            # Extract JSON from code fence - flexible pattern
+                            json_pattern = r"```json\s*[\r\n]+(.*?)[\r\n]+```"
+                            match = re.search(json_pattern, json_block, re.DOTALL)
+                            if match:
+                                json_content = match.group(1).strip()
+                            else:
+                                json_content = None
+                        else:
+                            json_content = None
+                    else:
+                        # Raw JSON - look for closing }
+                        # Count braces to find the matching closing brace
+                        brace_count = 0
+                        json_block_end = None
+                        for i in range(json_block_start, len(buffer)):
+                            if buffer[i] == '{':
+                                brace_count += 1
+                            elif buffer[i] == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    json_block_end = i + 1
+                                    break
+                        
+                        if json_block_end:
+                            json_block = buffer[json_block_start:json_block_end]
+                            json_content = json_block.strip()
+                        else:
+                            json_content = None
+                    
+                    # If we have complete JSON, parse and execute
+                    if json_content:
+                        try:
+                            # Sanitize JSON: escape unescaped newlines and control chars in string values
                             try:
-                                tool_call = json.loads(match.group(1).strip())
-
-                                # Execute tool and yield result immediately
-                                async for tool_result in self._execute_single_tool_live(
-                                    tool_call, project_path, tool_results
-                                ):
-                                    yield tool_result
-
-                                has_executed_tools = True
-
+                                tool_call = json.loads(json_content)
                             except json.JSONDecodeError as je:
-                                yield f"\n**WARNING:** JSON Parse Warning: {str(je)}\n"
+                                # Try to fix common issues: unescaped newlines in strings
+                                import re as regex
+                                json_content = regex.sub(
+                                    r'("(?:[^"\\]|\\.)*")',
+                                    lambda m: m.group(1).replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t'),
+                                    json_content
+                                )
+                                tool_call = json.loads(json_content)
+
+                            # Execute tool and yield result immediately
+                            async for tool_result in self._execute_single_tool_live(
+                                tool_call, project_path, tool_results
+                            ):
+                                yield tool_result
+
+                            has_executed_tools = True
+
+                        except json.JSONDecodeError:
+                            pass  # JSON parsing failed, will try auto-close at end
+                        except Exception:
+                            pass  # Tool execution failed silently
 
                         # Update state
                         in_json_block = False
                         yielded_length = json_block_end
                         json_block_start = -1
 
+            # Handle incomplete JSON at end of stream
+            if in_json_block and json_block_start >= 0:
+                # Stream ended while we were in a JSON block
+                # Try to extract and execute whatever JSON we have
+                incomplete_json = buffer[json_block_start:].strip()
+                
+                # Try to extract JSON from code fence if present
+                if incomplete_json.startswith("```json"):
+                    json_pattern = r"```json\s*\n(.*?)(?:\n```)?$"
+                    match = re.search(json_pattern, incomplete_json, re.DOTALL)
+                    if match:
+                        json_content = match.group(1).strip()
+                    else:
+                        json_content = incomplete_json
+                else:
+                    json_content = incomplete_json
+                
+                # Try to parse and execute
+                if json_content and json_content.startswith('{'):
+                    try:
+                        tool_call = json.loads(json_content)
+                        # Execute tool
+                        async for tool_result in self._execute_single_tool_live(
+                            tool_call, project_path, tool_results
+                        ):
+                            yield tool_result
+                        has_executed_tools = True
+                    except json.JSONDecodeError as je:
+                        # Try to auto-close the JSON by adding missing braces
+                        open_braces = json_content.count('{')
+                        close_braces = json_content.count('}')
+                        missing_braces = open_braces - close_braces
+                        
+                        if missing_braces > 0:
+                            # Add missing closing braces
+                            auto_closed = json_content + ('}' * missing_braces)
+                            try:
+                                tool_call = json.loads(auto_closed)
+                                # Execute tool
+                                async for tool_result in self._execute_single_tool_live(
+                                    tool_call, project_path, tool_results
+                                ):
+                                    yield tool_result
+                                has_executed_tools = True
+                            except json.JSONDecodeError:
+                                pass  # Could not parse even after auto-closing
+            
             # Yield any remaining content
             if yielded_length < len(buffer):
                 remaining = buffer[yielded_length:]
@@ -952,12 +1167,20 @@ class AIEngine:
             # 1. end_response was explicitly called
             # 2. No tools were executed
             # 3. Max recursion depth reached
+            
+            # Debug: Check if we have file reads that need continuation
+            has_file_reads = any(r.get("type") == "file_read" for r in tool_results)
+            
             if (
                 has_end_response
                 or not has_executed_tools
                 or recursion_depth >= MAX_RECURSION_DEPTH
             ):
-                return
+                # Special case: if we have file reads but no continuation, force it
+                if has_file_reads and not has_end_response and recursion_depth < MAX_RECURSION_DEPTH:
+                    pass  # Don't return, allow continuation
+                else:
+                    return
 
             # Only continue if the auto-continuation manager says so
             if self.auto_continuation.should_continue(tool_results, has_end_response, buffer):
@@ -966,7 +1189,27 @@ class AIEngine:
                 # Add assistant's response to messages
                 messages.append({"role": "assistant", "content": buffer})
 
-                # Build continuation prompt
+                # Build file content section to inject into system prompt
+                file_contents_section = ""
+                for result in tool_results:
+                    if result.get("type") == "file_read":
+                        file_path = result.get("file_path", "unknown")
+                        content = result.get("content", "")
+                        file_contents_section += f"\n\n{'='*70}\n"
+                        file_contents_section += f"FILE CONTENT: {file_path}\n"
+                        file_contents_section += f"{'='*70}\n"
+                        file_contents_section += f"{content}\n"
+                        file_contents_section += f"{'='*70}\n"
+                
+                # If we have file contents, update the system message to include them
+                if file_contents_section:
+                    # Find and update the system message
+                    for msg in messages:
+                        if msg.get("role") == "system":
+                            msg["content"] += f"\n\n## FILES YOU JUST READ:\n{file_contents_section}"
+                            break
+
+                # Build continuation prompt (without file content since it's in system now)
                 continuation_prompt = self.auto_continuation.build_continuation_prompt(
                     tool_results, buffer
                 )
@@ -1157,50 +1400,84 @@ class AIEngine:
                 if result.success:
                     operation = args.get("operation")
                     file_path = args.get("file_path")
-                    content = [f"Operation: {operation}", f"File:      {file_path}"]
-
-                    # Show diff for write/edit operations inside the box
-                    if isinstance(result.data, dict):
-                        old_content = result.data.get("old_content")
-                        new_content = result.data.get("new_content")
-                        if old_content is not None and new_content is not None:
-                            # Generate unified diff
-                            import difflib
-
-                            old_lines = old_content.splitlines(keepends=True)
-                            new_lines = new_content.splitlines(keepends=True)
-                            diff = difflib.unified_diff(
-                                old_lines,
-                                new_lines,
-                                lineterm="",
-                                fromfile="before",
-                                tofile="after",
-                                n=3,
-                            )
-
+                    
+                    # Check if this is a read operation
+                    if operation in ["read_file", "read_file_lines"]:
+                        # Extract file content
+                        file_content = (
+                            result.data.get("content", "")
+                            if isinstance(result.data, dict)
+                            else str(result.data)
+                        )
+                        
+                        # Build tool box with content preview
+                        content = [f"Operation: {operation}", f"File:      {file_path}"]
+                        if file_content.strip():
                             content.append("")
-                            content.append("Diff:")
-                            for line in diff:
-                                line = line.rstrip()
-                                # Skip file markers
-                                if line.startswith("---") or line.startswith("+++"):
-                                    continue
-                                # Only show + and - signs for diff lines, no colors
-                                content.append(line)
+                            content.append("Content Preview:")
+                            content_lines = file_content.split("\n")[:10]
+                            for line in content_lines:
+                                truncated_line = line[:57]
+                                content.append(truncated_line)
+                            if len(file_content.split("\n")) > 10:
+                                content.append("...")
+                        
+                        box = self._format_tool_box("TOOL: file_operations", content)
+                        yield box
+                        
+                        # Add to tool_results with FULL content for continuation
+                        tool_results.append({
+                            "type": "file_read",
+                            "file_path": file_path,
+                            "content": file_content,
+                            "success": True,
+                        })
+                    else:
+                        # Other operations (write, create, etc.)
+                        content = [f"Operation: {operation}", f"File:      {file_path}"]
 
-                    box = self._format_tool_box("TOOL: file_operations", content)
-                    yield box
+                        # Show diff for write/edit operations inside the box
+                        if isinstance(result.data, dict):
+                            old_content = result.data.get("old_content")
+                            new_content = result.data.get("new_content")
+                            if old_content is not None and new_content is not None:
+                                # Generate unified diff
+                                import difflib
 
-                    # Add to tool results with output for continuation
-                    result_info = {
-                        "type": "file_op",
-                        "operation": operation,
-                        "file_path": file_path,
-                        "success": True,
-                    }
-                    if isinstance(result.data, dict) and "old_content" in result.data:
-                        result_info["modified"] = True
-                    tool_results.append(result_info)
+                                old_lines = old_content.splitlines(keepends=True)
+                                new_lines = new_content.splitlines(keepends=True)
+                                diff = difflib.unified_diff(
+                                    old_lines,
+                                    new_lines,
+                                    lineterm="",
+                                    fromfile="before",
+                                    tofile="after",
+                                    n=3,
+                                )
+
+                                content.append("")
+                                content.append("Diff:")
+                                for line in diff:
+                                    line = line.rstrip()
+                                    # Skip file markers
+                                    if line.startswith("---") or line.startswith("+++"):
+                                        continue
+                                    # Only show + and - signs for diff lines, no colors
+                                    content.append(line)
+
+                        box = self._format_tool_box("TOOL: file_operations", content)
+                        yield box
+
+                        # Add to tool results
+                        result_info = {
+                            "type": "file_op",
+                            "operation": operation,
+                            "file_path": file_path,
+                            "success": True,
+                        }
+                        if isinstance(result.data, dict) and "old_content" in result.data:
+                            result_info["modified"] = True
+                        tool_results.append(result_info)
                 else:
                     content = [str(result.error)]
                     box = self._format_tool_box("ERROR: file_operations", content)
@@ -1364,7 +1641,8 @@ class AIEngine:
         # Remove multiple consecutive newlines left by token removal
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
 
-        return cleaned.strip()
+        # Don't strip during streaming - preserves spaces between chunks
+        return cleaned
 
     async def _process_response_with_tools(
         self,
@@ -1466,12 +1744,20 @@ class AIEngine:
                         operation = cmd_args.get("operation", "run_command")
 
                         # Check if this is an async command
-                        if operation == "run_async_command":
+                        if result.data.get("background", False):
                             # Background command - show process ID
                             process_id = result.data.get("process_id", "unknown")
                             pid = result.data.get("pid", "unknown")
-                            display_msg = f"\n**SUCCESS:** Tool Used: command_runner (background)\n**Command:** {command}\n**Status:** Running in background\n**Process ID:** {process_id} (PID: {pid})\n**INFO:** Use `/ct {process_id}` to terminate this process\n"
-                            yield display_msg
+                            content = [
+                                f"Command: {command}",
+                                f"Status:  Running in background",
+                                f"Process: {process_id} (PID: {pid})",
+                                f"Tip:     Use /ct {process_id} to terminate",
+                            ]
+                            box = self._format_tool_box(
+                                "TOOL: command_runner (background)", content
+                            )
+                            yield box
                             tool_results.append(
                                 {
                                     "type": "command",
@@ -1482,32 +1768,33 @@ class AIEngine:
                             )
                         else:
                             # Synchronous command - show output
-                            stdout = (
-                                result.data.get("stdout", "")
+                            full_output = (
+                                result.data.get("output", "")
                                 if isinstance(result.data, dict)
                                 else str(result.data)
                             )
-                            stderr = (
-                                result.data.get("stderr", "")
-                                if isinstance(result.data, dict)
-                                else ""
-                            )
 
-                            # Combine stdout and stderr for full output
-                            full_output = stdout
-                            if stderr and stderr.strip():
-                                full_output += f"\n[stderr]\n{stderr}"
-
-                            # Truncate very long outputs for display (but keep full output in data)
+                            # Truncate very long output for display
                             display_output = full_output
-                            if len(full_output) > 10000:
+                            if len(full_output) > 5000:
                                 display_output = (
-                                    full_output[:10000]
+                                    full_output[:5000]
                                     + f"\n\n... [Output truncated - {len(full_output)} total characters]"
                                 )
 
-                            display_msg = f"\n**SUCCESS:** Tool Used: command_runner\n**Command:** {command}\n**Output:**\n```\n{display_output}\n```\n"
-                            yield display_msg
+                            content = [f"Command: {command}", ""]
+                            if display_output.strip():
+                                content.append("Output:")
+                                # Add output lines, limit to 10 lines
+                                output_lines = display_output.split("\n")[:10]
+                                for line in output_lines:
+                                    truncated_line = line[:57]
+                                    content.append(truncated_line)
+                                if len(display_output.split("\n")) > 10:
+                                    content.append("...")
+
+                            box = self._format_tool_box("TOOL: command_runner", content)
+                            yield box
                             tool_results.append(
                                 {
                                     "type": "command",
@@ -1597,36 +1884,26 @@ class AIEngine:
                                     "success": True,
                                 }
                             )
-                        elif operation == "write_file_lines":
-                            # Show line range info for write_file_lines
-                            line_info = ""
-                            if isinstance(result.data, dict):
-                                start = result.data.get("start_line", 1)
-                                end = result.data.get("end_line", 1)
-                                lines_written = result.data.get("lines_written", 0)
-                                line_info = f" (lines {start}-{end}, {lines_written} lines written)"
-                            display_msg = f"\n**SUCCESS:** Tool Used: file_operations\n**Operation:** {operation} on {file_path}{line_info}\n"
-                            yield display_msg
-                            tool_results.append(
-                                {
-                                    "type": "file_op",
-                                    "operation": operation,
-                                    "success": True,
-                                }
-                            )
                         else:
-                            display_msg = f"\n**SUCCESS:** Tool Used: file_operations\n**Operation:** {operation} on {file_path}\n"
-                            yield display_msg
+                            # Other file operations (write, create, etc.)
+                            box_content = [
+                                f"Operation: {operation}",
+                                f"File:      {file_path}",
+                            ]
+                            box = self._format_tool_box(
+                                "TOOL: file_operations", box_content
+                            )
+                            yield box
                             tool_results.append(
                                 {
                                     "type": "file_op",
                                     "operation": operation,
+                                    "file_path": file_path,
                                     "success": True,
                                 }
                             )
                     else:
-                        error_msg = f"\n**ERROR:** File Error: {result.error}\n"
-                        yield error_msg
+                        yield f"\n**ERROR:** File Error: {result.error}\n"
                         tool_results.append(
                             {"type": "error", "error": result.error, "success": False}
                         )
@@ -2030,6 +2307,21 @@ TOOL USAGE RULES:
 - Always use tools instead of just showing code examples
 - Use multiple tool calls in sequence to complete entire projects
 
+CRITICAL: COMMAND RUNNER - BACKGROUND vs FOREGROUND:
+- ALWAYS run LONG-RUNNING commands in BACKGROUND using "run_async_command" operation
+- Long-running commands include:
+  * npm install, npm start, npm run dev
+  * yarn install, yarn start, yarn dev
+  * python manage.py runserver, flask run, uvicorn
+  * Any server/dev server commands
+  * Any command that doesn't terminate immediately
+- Use "run_command" operation ONLY for QUICK commands that finish in <5 seconds:
+  * ls, cat, echo, mkdir, touch
+  * git status, git add, git commit
+  * Quick file operations
+- WRONG: {"operation": "run_command", "command": "npm start"}  ❌ This will BLOCK
+- RIGHT:  {"operation": "run_async_command", "command": "npm start"}  ✅ Runs in background
+
 WEB SEARCH TOOL USAGE (CRITICAL - WHEN TO USE):
 - ALWAYS use web_search when user asks to implement something that requires current/external information:
   * Latest API documentation (e.g., "implement OpenAI API", "use Stripe payment")
@@ -2061,8 +2353,35 @@ CRITICAL: COMPLETE MODIFICATION REQUESTS
 - DO NOT just explain what needs to be changed - ACTUALLY CHANGE IT
 - Reading without writing is INCOMPLETE - always follow read with write for modification requests
 
+AVAILABLE TOOLS AND THEIR OPERATIONS:
+
+1. file_operations - For ALL file read/write operations:
+   - read_file: Read entire file content
+   - read_file_lines: Read specific lines from a file (1-indexed)
+   - write_file: Write/overwrite entire file
+   - write_file_lines: Replace specific lines in a file (1-indexed)
+   - create_file: Create new file with content
+   - create_directory: Create new directory
+   - delete_file: Delete file or directory
+   - list_directory: List directory contents
+   - search_files: Search for files by pattern
+   - copy_file: Copy file or directory
+   - move_file: Move file or directory
+
+2. command_runner - For running shell commands:
+   - run_command: Run quick commands (<5 seconds)
+   - run_async_command: Run long-running commands in background
+
+3. web_search - For searching the web:
+   - search_web: Search for information online
+
+4. file_reader - For advanced file searching (RARELY NEEDED):
+   - grep_search: Search for patterns in files (use file_operations.search_files instead)
+   - list_directory: List directory (use file_operations.list_directory instead)
+
 CRITICAL FILE OPERATION RULES:
-- When READING files: Check if they exist first with 'ls', then use read_file operation
+- ALWAYS use "file_operations" tool for reading/writing files, NOT "file_reader"
+- When READING files: Use file_operations with read_file operation
 - When CREATING new projects: Immediately create all necessary files without exploration
 - When MODIFYING files: Check if they exist first, read them, then write changes
 - If a file doesn't exist when trying to read/modify it, inform the user and ask if they want to create it

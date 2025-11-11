@@ -76,7 +76,7 @@ from .rules import RulesManager
 console = Console()
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.1.4", prog_name="Cognautic CLI")
+@click.version_option(version="1.1.5", prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -212,7 +212,24 @@ def chat(provider, model, project_path, websocket_port, session):
             
             current_model = model or saved_model  # Track current model in this scope
             current_provider = provider or saved_provider or 'openai'  # Track current provider in this scope
+            
             session_created = False  # Track if session has been created
+            
+            # Check if indexing is needed (but don't block on it)
+            from .codebase_indexer import CodebaseIndexer
+            indexer = CodebaseIndexer(current_workspace)
+            needs_indexing = indexer.needs_reindex()
+            
+            # Show quick status if index exists
+            if not needs_indexing:
+                index = indexer.load_index()
+                if index:
+                    console.print(f"[dim]INFO: Codebase indexed: {index.total_files} files, {index.total_lines:,} lines[/dim]")
+            else:
+                console.print(f"[dim]INFO: Codebase will be indexed in background...[/dim]")
+            
+            # Flag to track if background indexing is running
+            indexing_in_background = needs_indexing
             
             # Store the original working directory where cognautic was run
             original_cwd = os.getcwd()
@@ -389,31 +406,35 @@ def chat(provider, model, project_path, websocket_port, session):
                             workspace=current_workspace
                         )
                         session_created = True
-                    
-                    # Add user message to memory
-                    memory_manager.add_message("user", user_input)
-                    
-                    # Update session title if this is the first message
-                    current_session = memory_manager.get_current_session()
-                    if current_session and current_session.message_count == 1:
+                        console.print(f"SUCCESS: Created new session: {session_id[:8]} - Chat Session {session_id[:8]}")
+                        
+                        # Generate title from first message
                         title = memory_manager.generate_session_title(user_input)
                         memory_manager.update_session_info(title=title)
+                        
+                        # Start background indexing if needed (after first message to not delay startup)
+                        if indexing_in_background:
+                            import threading
+                            
+                            def index_in_background():
+                                try:
+                                    console.print("\n[dim]📚 Indexing codebase in background...[/dim]")
+                                    index = indexer.index(lambda c, t, f: None)
+                                    indexer.save_index(index)
+                                    stats = indexer.get_stats(index)
+                                    console.print(f"\n[dim]✓ Indexed {stats['total_files']} files, {stats['total_lines']:,} lines[/dim]")
+                                except Exception as e:
+                                    console.print(f"\n[dim]⚠ Indexing failed: {e}[/dim]")
+                            
+                            index_thread = threading.Thread(target=index_in_background, daemon=True)
+                            index_thread.start()
+                            indexing_in_background = False
                     
                     # Process user input with AI (including conversation history)
                     console.print(f"[dim]Processing with {current_provider}, model: {current_model or 'default'}...[/dim]")
                     
                     # Get conversation history for context
                     conversation_history = memory_manager.get_context_for_ai(limit=10)
-                    
-                    # Get typing speed from config (default: fast)
-                    typing_speed = config_manager.get_config_value('typing_speed') or 'fast'
-                    speed_map = {
-                        'instant': 0,
-                        'fast': 0.001,
-                        'normal': 0.005,
-                        'slow': 0.01
-                    }
-                    typing_delay = speed_map.get(typing_speed, 0.001) if isinstance(typing_speed, str) else float(typing_speed)
                     
                     # Add border before AI response
                     console.print("[bold magenta]─[/bold magenta]" * 50)
@@ -432,12 +453,9 @@ def chat(provider, model, project_path, websocket_port, session):
                             project_path=current_workspace,
                             conversation_history=conversation_history
                         ):
-                            # Display character by character for typewriter effect
-                            for char in chunk:
-                                console.print(char, end="")
-                                full_response += char
-                                if typing_delay > 0:
-                                    await asyncio.sleep(typing_delay)
+                            # Display chunks immediately as they arrive (true streaming)
+                            console.print(chunk, end="")
+                            full_response += chunk
                     finally:
                         # Re-enable Ctrl+C after AI response
                         signal.signal(signal.SIGINT, original_handler)
@@ -921,6 +939,12 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 model=current_model,
                 workspace=current_workspace
             )
+            
+            # Generate title from a default message
+            title = f"Chat Session {session_id[:8]}"
+            memory_manager.update_session_info(title=title)
+            
+            console.print(f"SUCCESS: Created new session: {session_id[:8]} - {title}")
         
         elif parts[1] == "load" and len(parts) >= 3:
             session_identifier = parts[2]
@@ -1185,6 +1209,88 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         
         return True
     
+    elif cmd == "index":
+        # Manual codebase indexing control
+        from .codebase_indexer import CodebaseIndexer
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+        
+        current_workspace = context.get('current_workspace', os.getcwd())
+        indexer = CodebaseIndexer(current_workspace)
+        
+        if len(parts) < 2:
+            # Show index status
+            index = indexer.load_index()
+            if index:
+                console.print(f"\n[bold]INFO: Codebase Index Status[/bold]")
+                console.print(f"Root: {index.root_path}")
+                console.print(f"Files: {index.total_files}")
+                console.print(f"Lines: {index.total_lines:,}")
+                console.print(f"Size: {index.total_size / 1024 / 1024:.2f} MB")
+                console.print(f"Languages: {', '.join(f'{lang}({count})' for lang, count in index.languages.items())}")
+                console.print(f"Indexed: {index.indexed_at}")
+                console.print("\n[dim]Commands:[/dim]")
+                console.print("[dim]  /index rebuild - Rebuild index from scratch[/dim]")
+                console.print("[dim]  /index stats - Show detailed statistics[/dim]")
+            else:
+                console.print("[yellow]No index found. Run /index rebuild to create one.[/yellow]")
+        
+        elif parts[1] == "rebuild":
+            console.print("\n[yellow]📚 Rebuilding codebase index...[/yellow]")
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console
+            ) as progress:
+                task = progress.add_task("[cyan]Indexing files...", total=100)
+                
+                def progress_callback(current, total, file_path):
+                    percentage = (current / total) * 100
+                    progress.update(task, completed=percentage, description=f"[cyan]Indexing: {file_path[:50]}...")
+                
+                # Index codebase
+                index = indexer.index(progress_callback)
+                indexer.save_index(index)
+                
+                progress.update(task, completed=100, description="[green]✓ Indexing complete!")
+            
+            # Show stats
+            stats = indexer.get_stats(index)
+            console.print(f"[green]✓ Indexed {stats['total_files']} files, {stats['total_lines']:,} lines of code[/green]")
+            console.print(f"[dim]Languages: {', '.join(f'{lang}({count})' for lang, count in stats['languages'].items())}[/dim]\n")
+        
+        elif parts[1] == "stats":
+            index = indexer.load_index()
+            if not index:
+                console.print("[yellow]No index found. Run /index rebuild to create one.[/yellow]")
+            else:
+                console.print(f"\n[bold]📊 Detailed Index Statistics[/bold]\n")
+                console.print(f"[cyan]General:[/cyan]")
+                console.print(f"  Root Path: {index.root_path}")
+                console.print(f"  Total Files: {index.total_files}")
+                console.print(f"  Total Lines: {index.total_lines:,}")
+                console.print(f"  Total Size: {index.total_size / 1024 / 1024:.2f} MB")
+                console.print(f"  Indexed At: {index.indexed_at}\n")
+                
+                console.print(f"[cyan]Languages:[/cyan]")
+                for lang, count in sorted(index.languages.items(), key=lambda x: x[1], reverse=True):
+                    # Calculate total lines for this language
+                    lang_lines = sum(f.lines_of_code for f in index.files.values() if f.language == lang)
+                    console.print(f"  {lang}: {count} files, {lang_lines:,} lines")
+                
+                console.print(f"\n[cyan]Top 10 Largest Files:[/cyan]")
+                sorted_files = sorted(index.files.values(), key=lambda x: x.size, reverse=True)[:10]
+                for f in sorted_files:
+                    console.print(f"  {f.relative_path}: {f.size / 1024:.1f} KB ({f.lines_of_code} lines)")
+        
+        else:
+            console.print(f"[red]Unknown index command: {parts[1]}[/red]")
+            console.print("Available: rebuild, stats")
+        
+        return True
+    
     elif cmd == "exit" or cmd == "quit":
         return False
     
@@ -1217,6 +1323,9 @@ def show_help():
     help_text.append("  - /rules remove workspace <index> - Remove a workspace rule\n", style="dim")
     help_text.append("  - /rules clear global|workspace - Clear all rules of a type\n", style="dim")
     help_text.append("• /speed [instant|fast|normal|slow|<number>] - Set typing speed for AI responses\n")
+    help_text.append("• /index - Show codebase index status\n")
+    help_text.append("  - /index rebuild - Rebuild codebase index from scratch\n", style="dim")
+    help_text.append("  - /index stats - Show detailed index statistics\n", style="dim")
     help_text.append("• /ps or /processes - List all running background processes\n")
     help_text.append("• /ct <process_id> or /cancel <process_id> - Terminate a background process\n")
     help_text.append("• /clear - Clear chat screen\n")

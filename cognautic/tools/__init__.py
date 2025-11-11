@@ -10,6 +10,7 @@ from .code_analysis import CodeAnalysisTool
 from .response_control import ResponseControlTool
 from .directory_context import DirectoryContextTool
 from .code_navigation import CodeNavigationTool
+from .codebase_search import CodebaseSearchTool
 
 __all__ = [
     'ToolRegistry',
@@ -19,5 +20,6 @@ __all__ = [
     'CodeAnalysisTool',
     'ResponseControlTool',
     'DirectoryContextTool',
-    'CodeNavigationTool'
+    'CodeNavigationTool',
+    'CodebaseSearchTool'
 ]

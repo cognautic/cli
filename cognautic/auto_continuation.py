@@ -145,7 +145,8 @@ For example, if you want to use code_navigation to list symbols, you MUST includ
 Now execute the tool you mentioned:"""
         
         # Categorize tool results
-        has_file_ops = any(r.get('type') in ['file_op', 'file_write', 'file_read'] for r in tool_results)
+        has_file_reads = any(r.get('type') == 'file_read' for r in tool_results)
+        has_file_ops = any(r.get('type') in ['file_op', 'file_write'] for r in tool_results)
         has_commands = any(r.get('type') == 'command' for r in tool_results)
         has_web_search = any(r.get('type') in ['web_search', 'web_fetch'] for r in tool_results)
         
@@ -177,7 +178,21 @@ Now execute the tool you mentioned:"""
         context = "\n".join(context_parts)
         
         # Build appropriate prompt based on tool types
-        if has_web_search:
+        if has_file_reads and not has_file_ops and not has_commands:
+            # Special case: only file reads, AI needs to analyze the content
+            files_read = [r.get('file_path', 'unknown') for r in tool_results if r.get('type') == 'file_read']
+            files_list = '\n'.join(f"- {f}" for f in files_read)
+            return f"""You have successfully read the following files:
+
+{files_list}
+
+The file contents are provided above. Now analyze them and answer the user's question based on the ACTUAL content you just read.
+
+IMPORTANT: Use the actual file content provided above, not assumptions. Provide a detailed analysis based on what you see in the files.
+
+Your analysis:"""
+        
+        elif has_web_search:
             return f"""The web search has been completed. Based on the results:
 
 {context}
@@ -247,13 +262,41 @@ Continue now:"""
             AI's continuation response
         """
         try:
+            # Build tool results summary with actual content
+            # Use very clear formatting for providers that flatten messages (like Google)
+            tool_results_text = ""
+            for result in tool_results:
+                if result.get("type") == "file_read":
+                    # Include the actual file content with prominent headers
+                    file_path = result.get("file_path", "unknown")
+                    content = result.get("content", "")
+                    tool_results_text += f"\n\n{'='*70}\n"
+                    tool_results_text += f"FILE CONTENT: {file_path}\n"
+                    tool_results_text += f"{'='*70}\n"
+                    tool_results_text += f"{content}\n"
+                    tool_results_text += f"{'='*70}\n"
+                    tool_results_text += f"END OF FILE: {file_path}\n"
+                    tool_results_text += f"{'='*70}\n"
+                elif result.get("type") == "command":
+                    # Include command output
+                    command = result.get("command", "unknown")
+                    output = result.get("output", "")
+                    tool_results_text += f"\n\n{'='*70}\n"
+                    tool_results_text += f"COMMAND OUTPUT: {command}\n"
+                    tool_results_text += f"{'='*70}\n"
+                    tool_results_text += f"{output}\n"
+                    tool_results_text += f"{'='*70}\n"
+            
             # Build continuation prompt
             continuation_prompt = self.build_continuation_prompt(tool_results)
+            
+            # Combine tool results with continuation prompt
+            full_prompt = tool_results_text + "\n\n" + continuation_prompt if tool_results_text else continuation_prompt
             
             # Add to messages
             continuation_messages = messages + [
                 {"role": "assistant", "content": "I'll continue with the task."},
-                {"role": "user", "content": continuation_prompt}
+                {"role": "user", "content": full_prompt}
             ]
             
             # Generate response
