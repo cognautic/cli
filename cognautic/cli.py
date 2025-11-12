@@ -14,6 +14,7 @@ import subprocess
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.completion import Completer, Completion
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -72,11 +73,58 @@ from .ai_engine import AIEngine
 from .websocket_server import WebSocketServer
 from .memory import MemoryManager
 from .rules import RulesManager
+from .confirmation import ConfirmationManager
 
 console = Console()
 
+
+class SlashCommandCompleter(Completer):
+    """Auto-completer for slash commands"""
+    
+    def __init__(self):
+        self.commands = {
+            '/help': 'Show help information',
+            '/workspace': 'Change working directory (alias: /ws)',
+            '/ws': 'Change working directory',
+            '/setup': 'Run interactive setup wizard',
+            '/config': 'Manage configuration',
+            '/provider': 'Switch AI provider',
+            '/model': 'Switch AI model',
+            '/models': 'Fetch available models from provider',
+            '/lmodel': 'Load local Hugging Face model',
+            '/session': 'Manage chat sessions',
+            '/speed': 'Set typing speed',
+            '/yolo': 'Toggle YOLO mode (skip confirmations)',
+            '/index': 'Show codebase index status',
+            '/ps': 'List all running background processes',
+            '/processes': 'List all running background processes',
+            '/ct': 'Terminate a background process',
+            '/cancel': 'Terminate a background process',
+            '/clear': 'Clear chat screen',
+            '/exit': 'Exit chat session',
+            '/quit': 'Exit chat session',
+        }
+    
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        
+        # Only show completions if the line starts with /
+        if text.startswith('/'):
+            # Get the current word being typed
+            word = text.split()[-1] if text.split() else text
+            
+            # Show all commands that match
+            for cmd, description in self.commands.items():
+                if cmd.startswith(word):
+                    yield Completion(
+                        cmd,
+                        start_position=-len(word),
+                        display=cmd,
+                        display_meta=description
+                    )
+
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.1.5", prog_name="Cognautic CLI")
+@click.version_option(version="1.1.6", prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -252,6 +300,9 @@ def chat(provider, model, project_path, websocket_port, session):
             # Terminal mode state
             terminal_mode = [False]  # Use list to make it mutable in nested function
             
+            # Initialize confirmation manager
+            confirmation_manager = ConfirmationManager()
+            
             # Setup key bindings for Shift+Tab toggle and multi-line support
             bindings = KeyBindings()
             
@@ -271,10 +322,19 @@ def chat(provider, model, project_path, websocket_port, session):
             def new_line(event):
                 event.current_buffer.insert_text('\n')
             
-            # Create prompt session with multi-line support
+            @bindings.add('c-y')  # Ctrl+Y to toggle confirmation mode
+            def toggle_confirmation(event):
+                confirmation_manager.toggle_yolo_mode()
+                event.app.current_buffer.text = ''
+                event.app.exit(result='__CONFIRMATION_TOGGLE__')
+            
+            # Create prompt session with multi-line support and command completion
+            command_completer = SlashCommandCompleter()
             session = PromptSession(
                 key_bindings=bindings,
-                multiline=True  # Allow multi-line editing
+                multiline=True,  # Allow multi-line editing
+                completer=command_completer,
+                complete_while_typing=True  # Show completions as you type
             )
             
             console.print("[dim]INFO: Press Shift+Tab to toggle between Chat and Terminal modes[/dim]\n")
@@ -293,6 +353,11 @@ def chat(provider, model, project_path, websocket_port, session):
                         mode_name = ">  Terminal" if terminal_mode[0] else ">  Chat"
                         console.print(f"[bold yellow]Switched to {mode_name} mode[/bold yellow]")
                         console.print("[dim]Press Shift+Tab to toggle modes[/dim]")
+                        continue
+                    
+                    # Handle confirmation mode toggle
+                    if user_input == '__CONFIRMATION_TOGGLE__':
+                        confirmation_manager.display_mode_status()
                         continue
                     
                     if user_input.lower() in ['exit', 'quit']:
@@ -380,7 +445,8 @@ def chat(provider, model, project_path, websocket_port, session):
                             'provider': current_provider,
                             'memory_manager': memory_manager,
                             'original_cwd': original_cwd,
-                            'config_manager': config_manager
+                            'config_manager': config_manager,
+                            'confirmation_manager': confirmation_manager
                         }
                         result = await handle_slash_command(user_input, config_manager, ai_engine, context)
                         if result:
@@ -451,7 +517,8 @@ def chat(provider, model, project_path, websocket_port, session):
                             provider=current_provider, 
                             model=current_model,
                             project_path=current_workspace,
-                            conversation_history=conversation_history
+                            conversation_history=conversation_history,
+                            confirmation_manager=confirmation_manager
                         ):
                             # Display chunks immediately as they arrive (true streaming)
                             console.print(chunk, end="")
@@ -1291,6 +1358,15 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         
         return True
     
+    elif cmd == "yolo":
+        confirmation_manager = context.get('confirmation_manager')
+        if confirmation_manager:
+            confirmation_manager.toggle_yolo_mode()
+            confirmation_manager.display_mode_status()
+        else:
+            console.print("ERROR: Confirmation manager not available", style="red")
+        return True
+    
     elif cmd == "exit" or cmd == "quit":
         return False
     
@@ -1304,8 +1380,12 @@ def show_help():
     help_text.append("Available commands:\n", style="bold")
     help_text.append("• Press Enter - Send message\n", style="bold green")
     help_text.append("• Press Alt+Enter - New line (multi-line input)\n", style="bold green")
+    help_text.append("• Press Tab - Auto-complete slash commands\n", style="bold green")
     help_text.append("• Press Ctrl+C twice - Exit CLI\n", style="bold yellow")
     help_text.append("• Press Shift+Tab - Toggle between Chat and Terminal modes\n", style="bold yellow")
+    help_text.append("• Press Ctrl+Y - Toggle between Safe and YOLO modes\n", style="bold yellow")
+    help_text.append("\n")
+    help_text.append("Slash Commands (type / to see auto-complete):\n", style="bold cyan")
     help_text.append("• /help - Show this help message\n")
     help_text.append("• /workspace <path> or /ws <path> - Change working directory\n")
     help_text.append("• /setup - Run interactive setup wizard\n")
@@ -1323,12 +1403,17 @@ def show_help():
     help_text.append("  - /rules remove workspace <index> - Remove a workspace rule\n", style="dim")
     help_text.append("  - /rules clear global|workspace - Clear all rules of a type\n", style="dim")
     help_text.append("• /speed [instant|fast|normal|slow|<number>] - Set typing speed for AI responses\n")
+    help_text.append("• /yolo - Toggle YOLO mode (skip confirmations for AI operations)\n", style="bold yellow")
     help_text.append("• /index - Show codebase index status\n")
     help_text.append("  - /index rebuild - Rebuild codebase index from scratch\n", style="dim")
     help_text.append("  - /index stats - Show detailed index statistics\n", style="dim")
     help_text.append("• /ps or /processes - List all running background processes\n")
     help_text.append("• /ct <process_id> or /cancel <process_id> - Terminate a background process\n")
     help_text.append("• /clear - Clear chat screen\n")
+    help_text.append("\n")
+    help_text.append("Confirmation Modes:\n", style="bold cyan")
+    help_text.append("• Safe Mode (default) - AI asks for confirmation before file/command operations\n", style="green")
+    help_text.append("• YOLO Mode - AI executes operations without confirmation (use /yolo or Ctrl+Y)\n", style="yellow")
     help_text.append("• /exit or /quit - Exit chat session\n")
     help_text.append("• exit or quit - Exit chat session\n")
     help_text.append("\n")

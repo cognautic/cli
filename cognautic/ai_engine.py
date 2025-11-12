@@ -847,6 +847,7 @@ class AIEngine:
         project_path: str = None,
         context: List[Dict] = None,
         conversation_history: List[Dict] = None,
+        confirmation_manager = None,
     ):
         """Process a user message and generate streaming AI response"""
 
@@ -905,7 +906,7 @@ class AIEngine:
 
         # Stream response with real-time tool detection and execution
         async for chunk in self._stream_with_live_tools(
-            ai_provider, messages, model, max_tokens, config, project_path
+            ai_provider, messages, model, max_tokens, config, project_path, confirmation_manager
         ):
             yield chunk
 
@@ -917,6 +918,7 @@ class AIEngine:
         max_tokens: int,
         config: dict,
         project_path: str,
+        confirmation_manager = None,
         recursion_depth: int = 0,
     ):
         """Stream AI response with real-time tool detection and execution"""
@@ -947,7 +949,7 @@ class AIEngine:
                 temperature=config.get("temperature", 0.7),
             )
             async for chunk in self._process_response_with_tools(
-                response, project_path, messages, ai_provider, model, config
+                response, project_path, messages, ai_provider, model, config, confirmation_manager
             ):
                 yield chunk
             return
@@ -1086,7 +1088,7 @@ class AIEngine:
 
                             # Execute tool and yield result immediately
                             async for tool_result in self._execute_single_tool_live(
-                                tool_call, project_path, tool_results
+                                tool_call, project_path, tool_results, confirmation_manager
                             ):
                                 yield tool_result
 
@@ -1125,7 +1127,7 @@ class AIEngine:
                         tool_call = json.loads(json_content)
                         # Execute tool
                         async for tool_result in self._execute_single_tool_live(
-                            tool_call, project_path, tool_results
+                            tool_call, project_path, tool_results, confirmation_manager
                         ):
                             yield tool_result
                         has_executed_tools = True
@@ -1142,7 +1144,7 @@ class AIEngine:
                                 tool_call = json.loads(auto_closed)
                                 # Execute tool
                                 async for tool_result in self._execute_single_tool_live(
-                                    tool_call, project_path, tool_results
+                                    tool_call, project_path, tool_results, confirmation_manager
                                 ):
                                     yield tool_result
                                 has_executed_tools = True
@@ -1225,6 +1227,7 @@ class AIEngine:
                     max_tokens,
                     config,
                     project_path,
+                    confirmation_manager,
                     recursion_depth + 1,
                 ):
                     yield chunk
@@ -1285,7 +1288,7 @@ class AIEngine:
         return box
 
     async def _execute_single_tool_live(
-        self, tool_call: dict, project_path: str, tool_results: list
+        self, tool_call: dict, project_path: str, tool_results: list, confirmation_manager = None
     ):
         """Execute a single tool call and yield the result immediately"""
         try:
@@ -1303,6 +1306,22 @@ class AIEngine:
 
             # Execute the tool (reuse existing tool execution logic)
             if tool_name == "command_runner":
+                # Ask for confirmation if not in YOLO mode
+                if confirmation_manager and not confirmation_manager.is_yolo_mode():
+                    cmd_args = args.copy()
+                    if "operation" not in cmd_args:
+                        cmd_args["operation"] = "run_command"
+                    if "cwd" not in cmd_args:
+                        cmd_args["cwd"] = project_path or "."
+                    
+                    confirmed = await confirmation_manager.confirm_operation("command_runner", cmd_args)
+                    if not confirmed:
+                        # User cancelled the operation
+                        content = ["Operation cancelled by user"]
+                        box = self._format_tool_box("CANCELLED: command_runner", content)
+                        yield box
+                        tool_results.append({"type": "cancelled", "tool": "command_runner", "success": False})
+                        return
                 cmd_args = args.copy()
                 if "operation" not in cmd_args:
                     cmd_args["operation"] = "run_command"
@@ -1392,6 +1411,20 @@ class AIEngine:
                     path = Path(file_path)
                     if not path.is_absolute():
                         args["file_path"] = str(Path(project_path) / file_path)
+                
+                # Ask for confirmation if not in YOLO mode (skip for read operations)
+                operation = args.get("operation")
+                if confirmation_manager and not confirmation_manager.is_yolo_mode():
+                    # Only confirm write/modify/delete operations, not reads
+                    if operation not in ["read_file", "read_file_lines", "list_directory"]:
+                        confirmed = await confirmation_manager.confirm_operation("file_operations", args)
+                        if not confirmed:
+                            # User cancelled the operation
+                            content = ["Operation cancelled by user"]
+                            box = self._format_tool_box("CANCELLED: file_operations", content)
+                            yield box
+                            tool_results.append({"type": "cancelled", "tool": "file_operations", "success": False})
+                            return
 
                 result = await self.tool_registry.execute_tool(
                     "file_operations", user_id="ai_engine", **args
@@ -1652,6 +1685,7 @@ class AIEngine:
         ai_provider,
         model: str,
         config: dict,
+        confirmation_manager = None,
         recursion_depth: int = 0,
     ):
         """Process response and execute tools with AI continuation"""
@@ -1730,6 +1764,21 @@ class AIEngine:
 
                 # Execute the tool
                 if tool_name == "command_runner":
+                    # Ask for confirmation if not in YOLO mode
+                    if confirmation_manager and not confirmation_manager.is_yolo_mode():
+                        cmd_args = args.copy()
+                        if "operation" not in cmd_args:
+                            cmd_args["operation"] = "run_command"
+                        if "cwd" not in cmd_args:
+                            cmd_args["cwd"] = project_path or "."
+                        
+                        confirmed = await confirmation_manager.confirm_operation("command_runner", cmd_args)
+                        if not confirmed:
+                            # User cancelled the operation
+                            yield "\n**CANCELLED:** Command execution cancelled by user\n"
+                            tool_results.append({"type": "cancelled", "tool": "command_runner", "success": False})
+                            continue
+                    
                     cmd_args = args.copy()
                     if "operation" not in cmd_args:
                         cmd_args["operation"] = "run_command"
@@ -1819,6 +1868,18 @@ class AIEngine:
                         path = Path(file_path)
                         if not path.is_absolute():
                             args["file_path"] = str(Path(project_path) / file_path)
+                    
+                    # Ask for confirmation if not in YOLO mode (skip for read operations)
+                    operation = args.get("operation")
+                    if confirmation_manager and not confirmation_manager.is_yolo_mode():
+                        # Only confirm write/modify/delete operations, not reads
+                        if operation not in ["read_file", "read_file_lines", "list_directory"]:
+                            confirmed = await confirmation_manager.confirm_operation("file_operations", args)
+                            if not confirmed:
+                                # User cancelled the operation
+                                yield "\n**CANCELLED:** File operation cancelled by user\n"
+                                tool_results.append({"type": "cancelled", "tool": "file_operations", "success": False})
+                                continue
 
                     result = await self.tool_registry.execute_tool(
                         "file_operations", user_id="ai_engine", **args
@@ -2103,6 +2164,7 @@ class AIEngine:
                     ai_provider,
                     model,
                     config,
+                    confirmation_manager,
                     recursion_depth + 1,
                 ):
                     yield chunk

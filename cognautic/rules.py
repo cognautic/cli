@@ -210,7 +210,7 @@ class RulesManager:
             console.print(table)
             console.print()
         else:
-            console.print("📝 No global rules defined", style="dim")
+            console.print("INFO: No global rules defined", style="dim")
             console.print()
         
         # Display workspace rules
@@ -231,16 +231,16 @@ class RulesManager:
             
             console.print(table)
         else:
-            console.print(f"📝 No workspace rules defined for current workspace", style="dim")
+            console.print(f"INFO No workspace rules defined for current workspace", style="dim")
     
     def clear_global_rules(self) -> bool:
         """Clear all global rules"""
         self._save_global_rules([])
-        console.print("✅ All global rules cleared", style="green")
+        console.print("INFO: All global rules cleared", style="green")
         return True
     
     def clear_workspace_rules(self, workspace_path: Optional[str] = None) -> bool:
         """Clear all workspace rules"""
         self._save_workspace_rules([], workspace_path)
-        console.print("✅ All workspace rules cleared", style="green")
+        console.print("INFO: All workspace rules cleared", style="green")
         return True
