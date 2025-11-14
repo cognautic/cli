@@ -18,6 +18,10 @@ from prompt_toolkit.completion import Completer, Completion
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
+from rich.live import Live
+from rich.columns import Columns
+import threading
+import queue
 
 # Suppress verbose logging from Google AI and other libraries
 os.environ['GRPC_VERBOSITY'] = 'NONE'
@@ -91,10 +95,13 @@ class SlashCommandCompleter(Completer):
             '/provider': 'Switch AI provider',
             '/model': 'Switch AI model',
             '/models': 'Fetch available models from provider',
+            '/endpoint': 'Set provider endpoint/base URL',
             '/lmodel': 'Load local Hugging Face model',
             '/session': 'Manage chat sessions',
             '/speed': 'Set typing speed',
             '/yolo': 'Toggle YOLO mode (skip confirmations)',
+            '/mml': 'Enable multi-model mode with specified providers/models',
+            '/qmml': 'Quit multi-model mode',
             '/index': 'Show codebase index status',
             '/ps': 'List all running background processes',
             '/processes': 'List all running background processes',
@@ -124,7 +131,7 @@ class SlashCommandCompleter(Completer):
                     )
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.1.6", prog_name="Cognautic CLI")
+@click.version_option(version="1.1.7", prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -181,14 +188,28 @@ def chat(provider, model, project_path, websocket_port, session):
     config_manager = ConfigManager()
     memory_manager = MemoryManager()
     
-    # Check if any providers are configured
-    available_providers = config_manager.list_providers()
-    if not available_providers:
-        console.print("🔧 No API keys configured. Let's set up Cognautic CLI first!", style="yellow")
+    # Determine available providers: configured (with API keys) + no-auth providers (e.g., ollama)
+    from .provider_endpoints import get_all_providers, get_provider_config
+    configured_providers = config_manager.list_providers()
+    no_auth_providers = [
+        p for p in get_all_providers()
+        if get_provider_config(p).get('no_auth', False)
+    ]
+    combined_providers = sorted(set(configured_providers) | set(no_auth_providers))
+    
+    # If none at all, run setup to configure at least one API-key provider
+    if not combined_providers:
+        console.print("🔧 No providers available. Let's set up Cognautic CLI first!", style="yellow")
         config_manager.interactive_setup()
-        available_providers = config_manager.list_providers()
-        if not available_providers:
-            console.print("ERROR: Setup cancelled. Cannot start chat without API keys.", style="red")
+        configured_providers = config_manager.list_providers()
+        # Recompute combined providers after setup
+        no_auth_providers = [
+            p for p in get_all_providers()
+            if get_provider_config(p).get('no_auth', False)
+        ]
+        combined_providers = sorted(set(configured_providers) | set(no_auth_providers))
+        if not combined_providers:
+            console.print("ERROR: Setup cancelled. No providers available.", style="red")
             return
     
     # Handle session loading
@@ -206,11 +227,37 @@ def chat(provider, model, project_path, websocket_port, session):
     
     # Use provided provider or last used provider or default
     if not provider or not isinstance(provider, str):
-        provider = config_manager.get_config_value('last_provider') or config_manager.get_config_value('default_provider') or available_providers[0]
+        provider = (
+            config_manager.get_config_value('last_provider')
+            or config_manager.get_config_value('default_provider')
+            or (combined_providers[0] if combined_providers else None)
+        )
     
-    if not config_manager.has_api_key(provider):
-        console.print(f"ERROR: No API key found for {provider}. Available providers: {', '.join(available_providers)}", style="red")
-        return
+    # Enforce API key only for providers that require it; fallback to a valid provider if possible
+    prov_cfg = get_provider_config(provider) if isinstance(provider, str) else {}
+    requires_key = not prov_cfg.get('no_auth', False)
+    if requires_key and not config_manager.has_api_key(provider):
+        # Try to fallback to a no-auth provider or any configured provider with a key
+        fallback_providers = []
+        for p in combined_providers:
+            cfg = get_provider_config(p)
+            if cfg.get('no_auth', False) or config_manager.has_api_key(p):
+                fallback_providers.append(p)
+        # Remove the invalid current provider if present
+        fallback_providers = [p for p in fallback_providers if p != provider]
+        if fallback_providers:
+            new_provider = fallback_providers[0]
+            console.print(
+                f"WARNING: No API key for '{provider}'. Falling back to '{new_provider}'.",
+                style="yellow",
+            )
+            provider = new_provider
+        else:
+            console.print(
+                f"ERROR: No API key found for {provider}. Available providers: {', '.join(combined_providers)}",
+                style="red",
+            )
+            return
     
     # Load saved model for the provider if no model was specified
     if not model or not isinstance(model, str):
@@ -260,6 +307,12 @@ def chat(provider, model, project_path, websocket_port, session):
             
             current_model = model or saved_model  # Track current model in this scope
             current_provider = provider or saved_provider or 'openai'  # Track current provider in this scope
+            
+            # Multi-model mode state
+            multi_model_mode = False
+            multi_model_configs = []  # List of (provider, model) tuples
+            multi_model_folders = {}  # Map of model names to folder paths
+            original_workspace = current_workspace  # Store original workspace for restoration
             
             session_created = False  # Track if session has been created
             
@@ -446,7 +499,11 @@ def chat(provider, model, project_path, websocket_port, session):
                             'memory_manager': memory_manager,
                             'original_cwd': original_cwd,
                             'config_manager': config_manager,
-                            'confirmation_manager': confirmation_manager
+                            'confirmation_manager': confirmation_manager,
+                            'multi_model_mode': multi_model_mode,
+                            'multi_model_configs': multi_model_configs,
+                            'multi_model_folders': multi_model_folders,
+                            'original_workspace': original_workspace
                         }
                         result = await handle_slash_command(user_input, config_manager, ai_engine, context)
                         if result:
@@ -455,6 +512,9 @@ def chat(provider, model, project_path, websocket_port, session):
                             current_workspace = context.get('current_workspace', current_workspace)
                             current_model = context.get('model', current_model)
                             current_provider = context.get('provider', current_provider)
+                            multi_model_mode = context.get('multi_model_mode', multi_model_mode)
+                            multi_model_configs = context.get('multi_model_configs', multi_model_configs)
+                            multi_model_folders = context.get('multi_model_folders', multi_model_folders)
                             
                             # If workspace changed, update the session
                             if old_workspace != current_workspace and memory_manager.get_current_session():
@@ -480,7 +540,6 @@ def chat(provider, model, project_path, websocket_port, session):
                         
                         # Start background indexing if needed (after first message to not delay startup)
                         if indexing_in_background:
-                            import threading
                             
                             def index_in_background():
                                 try:
@@ -497,38 +556,137 @@ def chat(provider, model, project_path, websocket_port, session):
                             indexing_in_background = False
                     
                     # Process user input with AI (including conversation history)
-                    console.print(f"[dim]Processing with {current_provider}, model: {current_model or 'default'}...[/dim]")
-                    
-                    # Get conversation history for context
-                    conversation_history = memory_manager.get_context_for_ai(limit=10)
-                    
-                    # Add border before AI response
-                    console.print("[bold magenta]─[/bold magenta]" * 50)
-                    console.print("[bold magenta]AI:[/bold magenta] ", end="")
-                    full_response = ""
-                    
-                    # Disable Ctrl+C during AI response
-                    import signal
-                    original_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
-                    
-                    try:
-                        async for chunk in ai_engine.process_message_stream(
-                            user_input, 
-                            provider=current_provider, 
-                            model=current_model,
-                            project_path=current_workspace,
-                            conversation_history=conversation_history,
-                            confirmation_manager=confirmation_manager
-                        ):
-                            # Display chunks immediately as they arrive (true streaming)
-                            console.print(chunk, end="")
-                            full_response += chunk
-                    finally:
-                        # Re-enable Ctrl+C after AI response
-                        signal.signal(signal.SIGINT, original_handler)
-                    
-                    console.print()  # New line after streaming
-                    console.print("[bold magenta]─[/bold magenta]" * 50)  # Border after AI response
+                    if multi_model_mode:
+                        # Multi-model mode: process with all configured models
+                        console.print(f"[dim]Processing with {len(multi_model_configs)} models in parallel...[/dim]")
+                        
+                        # Get conversation history for context
+                        conversation_history = memory_manager.get_context_for_ai(limit=10)
+                        
+                        # Side-by-side concurrent streaming using Live Columns with threaded producers
+                        async def consume_queue(display_name, q, buffers):
+                            response = ""
+                            while True:
+                                chunk = await asyncio.to_thread(q.get)
+                                if chunk is sentinel:
+                                    break
+                                response += chunk
+                                buffers[display_name] = response
+                            return response
+                        
+                        # Disable Ctrl+C during AI responses
+                        import signal
+                        original_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+                        
+                        try:
+                            # Prepare buffers and tasks for concurrent streaming
+                            all_responses = []
+                            import re
+                            model_buffers = {}
+                            display_names = []
+                            tasks = []
+                            model_queues = {}
+                            # unique sentinel to signal end of stream per model
+                            sentinel = object()
+                            # Fixed column widths to avoid layout shifts
+                            term_width = console.size.width
+                            num_cols = max(1, len(multi_model_configs))
+                            gap = 3
+                            col_width = max(20, int((term_width - (num_cols - 1) * gap) / num_cols))
+                            for provider_name, model_name in multi_model_configs:
+                                safe_model_name = re.sub(r'[/:\\<>|"?*]', '_', model_name) if model_name else provider_name
+                                folder_key = f"{provider_name}_{safe_model_name}"
+                                model_folder = multi_model_folders.get(folder_key, current_workspace)
+                                display_name = f"{provider_name}:{model_name}" if model_name else provider_name
+                                display_names.append(display_name)
+                                model_buffers[display_name] = ""
+                                q = queue.Queue()
+                                model_queues[display_name] = q
+
+                                # Start background producer thread that iterates provider stream and pushes chunks
+                                def _producer(p=provider_name, m=model_name, folder=model_folder, name=display_name, out_q=q):
+                                    async def _run():
+                                        try:
+                                            async for chunk in ai_engine.process_message_stream(
+                                                user_input,
+                                                provider=p,
+                                                model=m,
+                                                project_path=folder,
+                                                conversation_history=conversation_history,
+                                                confirmation_manager=confirmation_manager
+                                            ):
+                                                out_q.put(chunk)
+                                        except Exception as e:
+                                            out_q.put(f"[Error] {e}")
+                                        finally:
+                                            out_q.put(sentinel)
+                                    asyncio.run(_run())
+
+                                threading.Thread(target=_producer, daemon=True).start()
+
+                                # Async consumer task to drain queue and update buffers
+                                tasks.append(asyncio.create_task(consume_queue(display_name, q, model_buffers)))
+
+                            def render_columns():
+                                panels = []
+                                for name in display_names:
+                                    content = model_buffers.get(name, "")
+                                    text = Text(content, overflow="fold", no_wrap=False)
+                                    panels.append(Panel(text, title=name, width=col_width))
+                                return Columns(panels, equal=True, expand=False, padding=1)
+
+                            # Live render while tasks stream concurrently
+                            with Live(render_columns(), console=console, refresh_per_second=10, transient=True) as live:
+                                while any(not t.done() for t in tasks):
+                                    live.update(render_columns())
+                                    await asyncio.sleep(0.05)
+                                results = await asyncio.gather(*tasks, return_exceptions=True)
+                                live.update(render_columns())
+                            # Print one final static snapshot for scrollback
+                            console.print(render_columns())
+
+                            for res in results:
+                                if isinstance(res, str) and res:
+                                    all_responses.append(res)
+                            full_response = "\n\n".join(all_responses) if all_responses else ""
+                        finally:
+                            # Re-enable Ctrl+C after AI responses
+                            signal.signal(signal.SIGINT, original_handler)
+                    else:
+                        # Single model mode (original behavior)
+                        console.print(f"[dim]Processing with {current_provider}, model: {current_model or 'default'}...[/dim]")
+                        
+                        # Get conversation history for context
+                        conversation_history = memory_manager.get_context_for_ai(limit=10)
+                        
+                        # Add border before AI response
+                        console.print("[bold magenta]─[/bold magenta]" * 50)
+                        console.print("[bold magenta]AI:[/bold magenta] ", end="")
+                        full_response = ""
+                        
+                        # Disable Ctrl+C during AI response
+                        import signal
+                        original_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+                        
+                        try:
+                            async for chunk in ai_engine.process_message_stream(
+                                user_input, 
+                                provider=current_provider, 
+                                model=current_model,
+                                project_path=current_workspace,
+                                conversation_history=conversation_history,
+                                confirmation_manager=confirmation_manager
+                            ):
+                                # Display chunks immediately with minimal overhead
+                                sys.stdout.write(chunk)
+                                sys.stdout.flush()
+                                full_response += chunk
+                        finally:
+                            # Re-enable Ctrl+C after AI response
+                            signal.signal(signal.SIGINT, original_handler)
+                        
+                        console.print()  # New line after streaming
+                        console.print("[bold magenta]─[/bold magenta]" * 50)  # Border after AI response
                     
                     # Add AI response to memory
                     if full_response:
@@ -771,11 +929,11 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         if len(parts) < 2:
             current_provider = context.get('provider')
             console.print(f"Current provider: {current_provider}")
-            providers = config_manager.list_providers()
-            # Add local provider if available
-            if 'local' in ai_engine.providers:
-                providers.append('local')
-            console.print(f"Available providers: {', '.join(providers)}")
+            # Merge configured providers and initialized providers (e.g., no-auth like ollama)
+            configured = set(config_manager.list_providers())
+            initialized = set(ai_engine.get_available_providers())
+            providers = sorted(configured.union(initialized))
+            console.print(f"Available providers: {', '.join(providers) if providers else 'None'}")
             console.print("Usage: /provider <provider_name>")
         else:
             new_provider = parts[1]
@@ -808,7 +966,7 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 else:
                     console.print("ERROR: No local model configured", style="red")
                     console.print("INFO: Use /lmodel <path> to load a local model first", style="yellow")
-            elif config_manager.has_api_key(new_provider):
+            elif new_provider in ai_engine.providers or config_manager.has_api_key(new_provider):
                 context['provider'] = new_provider
                 current_provider = new_provider  # Update current provider
                 # Save the provider choice
@@ -840,20 +998,21 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 # Import API client
                 from .provider_endpoints import GenericAPIClient, get_provider_config
                 
-                # Get API key
+                # Get API key or allow if provider doesn't require auth
                 config_manager = context.get('config_manager')
-                api_key = config_manager.get_api_key(current_provider)
-                
-                if not api_key:
+                provider_config = get_provider_config(current_provider)
+                no_auth = provider_config.get('no_auth', False)
+                api_key = config_manager.get_api_key(current_provider) if not no_auth else ''
+                if not no_auth and not api_key:
                     console.print(f"ERROR: No API key configured for {current_provider}", style="red")
                     console.print(f"INFO: Run /setup to configure your API key")
                     return True
                 
                 # Create API client and fetch models
-                client = GenericAPIClient(current_provider, api_key)
+                base_url_override = config_manager.get_provider_endpoint(current_provider)
+                client = GenericAPIClient(current_provider, api_key or '', base_url_override)
                 
                 # Check if provider has models endpoint
-                provider_config = get_provider_config(current_provider)
                 if 'models_endpoint' not in provider_config:
                     console.print(f"INFO: {current_provider} doesn't provide a models API endpoint")
                     console.print(f"INFO: Check the provider's documentation for available models:")
@@ -954,6 +1113,49 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     console.print(f"SUCCESS: Switched to model: {new_model}")
             else:
                 console.print(f"SUCCESS: Switched to model: {new_model}")
+        return True
+    
+    elif cmd == "endpoint":
+        # Set or show endpoint/base URL for a provider
+        target_provider = None
+        base_url = None
+        if len(parts) == 1:
+            # Show current provider endpoint and usage
+            current_provider = context.get('provider')
+            if not current_provider:
+                console.print("ERROR: No provider selected", style="red")
+                console.print("Usage: /endpoint <base_url> OR /endpoint <provider> <base_url>")
+                return True
+            current_endpoint = config_manager.get_provider_endpoint(current_provider)
+            console.print(f"Current provider: {current_provider}")
+            console.print(f"Endpoint override: {current_endpoint or 'default'}")
+            console.print("Usage: /endpoint <base_url> OR /endpoint <provider> <base_url>")
+            return True
+        elif len(parts) == 2:
+            target_provider = context.get('provider')
+            base_url = parts[1]
+        else:
+            target_provider = parts[1]
+            base_url = parts[2]
+
+        if not target_provider:
+            console.print("ERROR: No provider selected", style="red")
+            return True
+        
+        # Basic validation
+        if not (base_url.startswith('http://') or base_url.startswith('https://')):
+            console.print("ERROR: Endpoint must start with http:// or https://", style="red")
+            return True
+
+        # Save endpoint override
+        config_manager.set_provider_endpoint(target_provider, base_url.rstrip('/'))
+        # Reinitialize providers to pick up endpoint change
+        try:
+            ai_engine._initialize_providers()
+        except Exception:
+            pass
+        console.print(f"SUCCESS: Set endpoint for {target_provider} = {base_url}")
+        
         return True
     
     elif cmd == "session":
@@ -1358,6 +1560,90 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         
         return True
     
+    elif cmd == "mml":
+        # Multi-model mode command
+        if len(parts) < 3 or len(parts) % 2 != 1:
+            console.print("ERROR: Usage: /mml provider1 model1 provider2 model2 provider3 model3", style="red")
+            console.print("Example: /mml openai gpt-4 anthropic claude-3-sonnet google gemini-pro", style="dim")
+            return True
+        
+        # Parse provider-model pairs
+        new_configs = []
+        for i in range(1, len(parts), 2):
+            if i + 1 < len(parts):
+                provider_name = parts[i]
+                model_name = parts[i + 1]
+                
+                # Validate provider is configured
+                config_manager = context.get('config_manager')
+                if not config_manager.has_api_key(provider_name):
+                    console.print(f"ERROR: Provider {provider_name} not configured. Available providers: {', '.join(config_manager.list_providers())}", style="red")
+                    return True
+                
+                new_configs.append((provider_name, model_name))
+        
+        if not new_configs:
+            console.print("ERROR: No valid provider-model pairs specified", style="red")
+            return True
+        
+        # Enable multi-model mode
+        context['multi_model_mode'] = True
+        context['multi_model_configs'] = new_configs
+        
+        # Create folders for each model
+        from pathlib import Path
+        import re
+        
+        current_workspace = context.get('current_workspace')
+        multi_model_folders = {}
+        
+        for provider, model_name in new_configs:
+            # Sanitize folder name by replacing invalid characters
+            safe_model_name = re.sub(r'[/:\\<>|"?*]', '_', model_name) if model_name else provider
+            folder_name = f"{provider}_{safe_model_name}"
+            model_folder = Path(current_workspace) / folder_name
+            try:
+                model_folder.mkdir(parents=True, exist_ok=True)
+                multi_model_folders[folder_name] = str(model_folder)
+                console.print(f"INFO: Created folder for {provider}:{model_name} at {model_folder}")
+            except Exception as e:
+                console.print(f"WARNING: Failed to create folder for {provider}:{model_name}: {e}", style="yellow")
+                # Continue with other models even if one fails
+        
+        context['multi_model_folders'] = multi_model_folders
+        
+        if not multi_model_folders:
+            console.print("ERROR: Failed to create folders for any models", style="red")
+            context['multi_model_mode'] = False
+            context['multi_model_configs'] = []
+            return True
+        
+        # Automatically enable YOLO mode
+        confirmation_manager = context.get('confirmation_manager')
+        if confirmation_manager and not confirmation_manager.yolo_mode:
+            confirmation_manager.toggle_yolo_mode()
+            console.print("INFO: Automatically enabled YOLO mode for multi-model operation", style="yellow")
+        
+        console.print(f"SUCCESS: Multi-model mode enabled with {len(new_configs)} models:", style="green")
+        for provider, model_name in new_configs:
+            console.print(f"  • {provider}:{model_name}")
+        console.print("INFO: Each model will work in its own folder to avoid conflicts", style="dim")
+        return True
+    
+    elif cmd == "qmml":
+        # Quit multi-model mode
+        if not context.get('multi_model_mode'):
+            console.print("INFO: Multi-model mode is not currently active", style="yellow")
+            return True
+        
+        context['multi_model_mode'] = False
+        context['multi_model_configs'] = []
+        context['multi_model_folders'] = {}
+        
+        console.print("SUCCESS: Multi-model mode disabled", style="green")
+        console.print("INFO: Returned to single model mode", style="dim")
+        return True
+    
     elif cmd == "yolo":
         confirmation_manager = context.get('confirmation_manager')
         if confirmation_manager:
@@ -1404,12 +1690,21 @@ def show_help():
     help_text.append("  - /rules clear global|workspace - Clear all rules of a type\n", style="dim")
     help_text.append("• /speed [instant|fast|normal|slow|<number>] - Set typing speed for AI responses\n")
     help_text.append("• /yolo - Toggle YOLO mode (skip confirmations for AI operations)\n", style="bold yellow")
+    help_text.append("• /mml <provider1> <model1> <provider2> <model2> ... - Enable multi-model mode\n", style="bold green")
+    help_text.append("  Example: /mml openai gpt-4 anthropic claude-3-sonnet google gemini-pro\n", style="dim")
+    help_text.append("• /qmml - Quit multi-model mode and return to single model\n", style="bold green")
     help_text.append("• /index - Show codebase index status\n")
     help_text.append("  - /index rebuild - Rebuild codebase index from scratch\n", style="dim")
     help_text.append("  - /index stats - Show detailed index statistics\n", style="dim")
     help_text.append("• /ps or /processes - List all running background processes\n")
     help_text.append("• /ct <process_id> or /cancel <process_id> - Terminate a background process\n")
     help_text.append("• /clear - Clear chat screen\n")
+    help_text.append("\n")
+    help_text.append("Multi-Model Mode:\n", style="bold cyan")
+    help_text.append("• Chat with multiple AI models simultaneously for comparison\n", style="green")
+    help_text.append("• Each model works in its own folder to avoid conflicts\n", style="green")
+    help_text.append("• Automatically enables YOLO mode to prevent confirmation conflicts\n", style="green")
+    help_text.append("• Use /mml to enable, /qmml to disable\n", style="green")
     help_text.append("\n")
     help_text.append("Confirmation Modes:\n", style="bold cyan")
     help_text.append("• Safe Mode (default) - AI asks for confirmation before file/command operations\n", style="green")

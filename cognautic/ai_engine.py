@@ -36,10 +36,10 @@ class AIProvider(ABC):
 class GenericProvider(AIProvider):
     """Generic provider that can work with any API endpoint"""
 
-    def __init__(self, api_key: str, provider_name: str):
+    def __init__(self, api_key: str, provider_name: str, base_url: Optional[str] = None):
         super().__init__(api_key)
         self.provider_name = provider_name
-        self.client = GenericAPIClient(provider_name, api_key)
+        self.client = GenericAPIClient(provider_name, api_key, base_url)
 
     async def generate_response(
         self, messages: List[Dict], model: str = None, **kwargs
@@ -60,6 +60,16 @@ class GenericProvider(AIProvider):
                     return response["content"][0]["text"]
                 return "No response generated"
 
+            elif self.provider_name == "ollama":
+                # Ollama returns { message: { content: ... } }
+                if isinstance(response, dict):
+                    msg = response.get("message") or {}
+                    if isinstance(msg, dict):
+                        content = msg.get("content")
+                        if content:
+                            return content
+                return "No response generated"
+
             else:
                 # OpenAI-compatible format
                 if "choices" in response and response["choices"]:
@@ -71,7 +81,29 @@ class GenericProvider(AIProvider):
 
     def get_available_models(self) -> List[str]:
         """Get list of available models - returns generic list since we support any model"""
+        if self.provider_name == "ollama":
+            # Avoid invalid placeholders; require explicit model selection for Ollama
+            return []
         return [f"{self.provider_name}-model-1", f"{self.provider_name}-model-2"]
+
+    async def generate_response_stream(
+        self, messages: List[Dict], model: str = None, **kwargs
+    ):
+        """Stream responses for providers that support it (Ollama)."""
+        try:
+            if self.provider_name == "ollama":
+                async for chunk in self.client.stream_chat_completion(
+                    messages, model, **kwargs
+                ):
+                    if chunk:
+                        yield chunk
+                return
+            # For other generic providers, no streaming implemented
+            # Fall back to non-streaming
+            text = await self.generate_response(messages, model, **kwargs)
+            yield text
+        except Exception as e:
+            raise Exception(f"{self.provider_name.title()} API streaming error: {str(e)}")
 
 
 class OpenAIProvider(AIProvider):
@@ -723,20 +755,26 @@ class AIEngine:
         }
 
         for provider_name in all_providers:
+            provider_cfg = get_provider_config(provider_name)
+            requires_key = not provider_cfg.get("no_auth", False)
             api_key = self.config_manager.get_api_key(provider_name)
-            if api_key:
-                try:
-                    # Use legacy provider if available, otherwise use generic provider
-                    if provider_name in legacy_provider_classes:
-                        self.providers[provider_name] = legacy_provider_classes[
-                            provider_name
-                        ](api_key)
-                    else:
-                        self.providers[provider_name] = GenericProvider(
-                            api_key, provider_name
-                        )
-                except Exception as e:
-                    print(f"Warning: Could not initialize {provider_name}: {e}")
+            base_url_override = self.config_manager.get_provider_endpoint(provider_name)
+
+            if requires_key and not api_key:
+                continue
+
+            try:
+                # Use legacy provider if available, otherwise use generic provider
+                if provider_name in legacy_provider_classes:
+                    self.providers[provider_name] = legacy_provider_classes[
+                        provider_name
+                    ](api_key)
+                else:
+                    self.providers[provider_name] = GenericProvider(
+                        api_key or "", provider_name, base_url_override
+                    )
+            except Exception as e:
+                print(f"Warning: Could not initialize {provider_name}: {e}")
 
         # Don't auto-load local model at startup - only load when explicitly requested
         # This prevents unnecessary loading and error messages when not using local provider
@@ -791,15 +829,15 @@ class AIEngine:
         # Build message context
         messages = []
 
-        # Add system message
+        # Add system message (full system prompt for all providers)
         system_prompt = self._build_system_prompt(project_path)
         messages.append({"role": "system", "content": system_prompt})
 
-        # Add conversation history if provided (for context)
+        # Add conversation history if provided (no trimming specific to Ollama)
         if conversation_history:
             messages.extend(conversation_history)
 
-        # Add context if provided (for additional context)
+        # Add context if provided (include for all providers)
         if context:
             messages.extend(context)
 
@@ -869,15 +907,15 @@ class AIEngine:
         # Build message context
         messages = []
 
-        # Add system message
+        # Add system message (full prompt for all providers)
         system_prompt = self._build_system_prompt(project_path)
         messages.append({"role": "system", "content": system_prompt})
 
-        # Add conversation history if provided (for context)
+        # Add conversation history if provided (no special trimming)
         if conversation_history:
             messages.extend(conversation_history)
 
-        # Add context if provided (for additional context)
+        # Add context if provided (include for all providers)
         if context:
             messages.extend(context)
 
@@ -903,6 +941,8 @@ class AIEngine:
         max_tokens = config.get("max_tokens", None)  # None = unlimited
         if max_tokens == 0 or max_tokens == -1:
             max_tokens = None  # Treat 0 or -1 as unlimited
+
+        # Route all providers (including Ollama) through live tool detection
 
         # Stream response with real-time tool detection and execution
         async for chunk in self._stream_with_live_tools(

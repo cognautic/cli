@@ -41,7 +41,7 @@ extras_require = {
 
 setup(
     name="cognautic-cli",
-    version="1.1.6",
+    version="1.1.7",
     author="Cognautic",
     author_email="cognautic@gmail.com",
     description="A Python-based CLI AI coding agent that provides agentic development capabilities with multi-provider AI support and real-time interaction",

@@ -142,8 +142,10 @@ class MessageHandler:
             
             # Collect full response for context
             full_response = ""
-            
-            # Stream AI response character by character
+
+            provider = session.get('ai_provider')
+
+            # Stream AI response
             async for chunk in self.ai_engine.process_message_stream(
                 message=user_message,
                 provider=session.get('ai_provider'),
@@ -152,18 +154,24 @@ class MessageHandler:
                 conversation_history=session.get('context', [])
             ):
                 full_response += chunk
-                
-                # Send each CHARACTER immediately for typewriter effect
-                for char in chunk:
+
+                # For Ollama or instant mode, send the whole chunk immediately (no per-char delay)
+                if provider == 'ollama' or typing_delay == 0:
                     await websocket.send(json.dumps({
                         'type': 'stream_chunk',
-                        'chunk': char,  # Single character
+                        'chunk': chunk,
                         'session_id': session_id
                     }))
-                    
-                    # Small delay for smooth typewriter effect (configurable)
-                    if typing_delay > 0:
-                        await asyncio.sleep(typing_delay)
+                else:
+                    # Typewriter effect: send character-by-character with small delay
+                    for char in chunk:
+                        await websocket.send(json.dumps({
+                            'type': 'stream_chunk',
+                            'chunk': char,
+                            'session_id': session_id
+                        }))
+                        if typing_delay > 0:
+                            await asyncio.sleep(typing_delay)
             
             # Send stream end notification
             await websocket.send(json.dumps({

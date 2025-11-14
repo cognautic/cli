@@ -33,7 +33,8 @@ class ConfigManager:
             "temperature": 0.7,
             "auto_save": True,
             "verbose_logging": False,
-            "provider_models": {}  # Store model selection per provider
+            "provider_models": {},  # Store model selection per provider
+            "provider_endpoints": {}  # Store endpoint overrides per provider
         }
         
         # Initialize configuration
@@ -201,6 +202,20 @@ class ConfigManager:
         config = self.get_config()
         provider_models = config.get('provider_models', {})
         return provider_models.get(provider)
+
+    def set_provider_endpoint(self, provider: str, base_url: str):
+        """Set the endpoint/base URL override for a provider"""
+        config = self.get_config()
+        if 'provider_endpoints' not in config:
+            config['provider_endpoints'] = {}
+        config['provider_endpoints'][provider] = base_url
+        self._save_config(config)
+
+    def get_provider_endpoint(self, provider: str) -> Optional[str]:
+        """Get the endpoint/base URL override for a provider, if any"""
+        config = self.get_config()
+        endpoints = config.get('provider_endpoints', {})
+        return endpoints.get(provider)
     
     def interactive_setup(self):
         """Interactive setup wizard"""

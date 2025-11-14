@@ -1,45 +1,46 @@
 # Changelog
 
-All notable changes to Cognautic CLI will be documented in this file.
+All notable changes to Cognautic CLI are documented in this file.
 
-## [1.1.6] - 2025-11-12
+The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
+
+## [1.1.7] - 2025-11-14
 
 ### Added
-- **Command Auto-Completion**
-  - Implemented slash command auto-completion using Tab key
-  - Shows available commands with descriptions as you type
-  - Automatically filters commands based on what you've typed
-  - Works with all slash commands (e.g., /help, /workspace, /model, etc.)
-  - Displays command descriptions in the completion menu
-  
-- **Confirmation Feature for AI Operations**
-  - Implemented Safe Mode (default) that prompts user for confirmation before AI executes destructive operations
-  - Added YOLO Mode for experienced users who want AI to execute operations without confirmation
-  - `/yolo` command to toggle between Safe and YOLO modes
-  - `Ctrl+Y` keybinding for quick mode switching during chat
-  - Visual status indicators showing current confirmation mode
-  - Smart confirmation logic:
-    - File operations: Confirms write, create, delete, move, copy operations
-    - File operations: Auto-approves read-only operations (read_file, list_directory)
-    - Command execution: Confirms all command runs (both foreground and background)
-  - Rich confirmation prompts with:
-    - Color-coded operation types
-    - Preview of file content for write operations
-    - Command details and working directory
-    - Clear instructions (ENTER to confirm, ESC to cancel)
-  - Updated help documentation with confirmation mode information
+- Ollama provider integration (no API key required)
+  - New provider `ollama` with default base URL `http://localhost:11434/api`
+  - Endpoints: `POST /chat`, `GET /tags` for models
+  - Works with `/provider ollama`
+  - New `/endpoint` command to set per-provider base URL override (e.g., remote host)
+  - `/model list` supports Ollama via `/api/tags`
+  - Documentation: added `OLLAMA.md` guide (setup, endpoint override, examples, troubleshooting)
+- Multi-Model Testing Mode (side-by-side)
+  - New `/mml` command enables parallel testing with multiple AI models
+  - Each model runs in its own isolated folder to avoid conflicts
+  - Automatic YOLO mode activation for seamless multi-model operation
+  - Live, per-model streaming using Rich Live + Columns; each model starts immediately
+  - Threaded producers + async consumers to guarantee concurrency even with blocking SDKs
+  - One final static snapshot after completion for scrollback
+  - Example: `/mml google gemini-2.5-flash openrouter gpt-4`
+- Folder name sanitization for models with special characters (`:`, `/`, `\`, etc.)
+- Graceful error handling for folder creation failures in multi-model mode
 
 ### Changed
-- AI engine now accepts `confirmation_manager` parameter throughout the tool execution pipeline
-- Tool execution methods updated to check confirmation mode before executing operations
-- Help text updated to include new `/yolo` command and `Ctrl+Y` keybinding
+- Startup provider selection and validation
+  - The CLI now combines configured providers (with API keys) and no-auth providers (e.g., Ollama)
+  - API key is only enforced for providers that actually require it
+  - If a selected provider lacks a required API key, the CLI falls back to a valid provider instead of aborting
+- Multi-model layout and UX
+  - Fixed column widths to prevent layout shifts during streaming
+  - Wrapped content inside panels to avoid horizontal overflow
+  - Folder creation now uses `parents=True` for better reliability
+  - Error messages for folder creation are warnings to allow partial success
+  - Enhanced validation ensures at least one model folder is created before enabling multi-model mode
 
-### Technical Details
-- New class: `SlashCommandCompleter` in `cognautic/cli.py` - Implements prompt_toolkit Completer interface
-- New module: `cognautic/confirmation.py` - Manages confirmation state and user prompts
-- Modified: `cognautic/cli.py` - Integrated confirmation manager and command completer into chat session
-- Modified: `cognautic/ai_engine.py` - Added confirmation checks in:
-  - `_execute_single_tool_live()` method
-  - `_process_response_with_tools()` method
-  - `_stream_with_live_tools()` method
-  - `process_message_stream()` method
+### Fixed
+- Provider registry boolean literal for `ollama` (`true` -> `True`) to prevent import error
+- Startup error "No API key found for ollama" by honoring no-auth providers and adding fallback
+- `UnboundLocalError` from local `threading` import shadowing; rely on module-level import
+- Multi-model runs no longer wait for the first model to finish; all start together
+- Removed periodic snapshot printing that caused duplicate boxes and scroll issues
+

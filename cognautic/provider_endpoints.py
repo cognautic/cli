@@ -181,6 +181,16 @@ PROVIDER_ENDPOINTS = {
         }
     },
     
+    "ollama": {
+        "base_url": "http://localhost:11434/api",
+        "chat_endpoint": "/chat",
+        "models_endpoint": "/tags",
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "no_auth": True
+    },
+    
     "palm": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
         "generate_endpoint": "/models/{model}:generateText",
@@ -208,15 +218,17 @@ PROVIDER_ENDPOINTS = {
 # Generic HTTP client for making API requests
 import aiohttp
 import json
+import os
 from typing import Dict, Any, Optional
 
 class GenericAPIClient:
     """Generic API client that can work with any provider"""
     
-    def __init__(self, provider_name: str, api_key: str):
+    def __init__(self, provider_name: str, api_key: str, base_url: Optional[str] = None):
         self.provider_name = provider_name
         self.api_key = api_key
         self.config = PROVIDER_ENDPOINTS.get(provider_name, {})
+        self.base_url_override = base_url
         
     def get_headers(self) -> Dict[str, str]:
         """Get headers with API key substituted"""
@@ -228,7 +240,10 @@ class GenericAPIClient:
     
     def get_url(self, endpoint_key: str, **kwargs) -> str:
         """Get full URL for an endpoint"""
-        base_url = self.config.get("base_url", "")
+        # Determine base URL with override precedence: explicit override > env var > config
+        base_url = self.base_url_override or \
+                   os.environ.get(f"{self.provider_name.upper()}_BASE_URL") or \
+                   self.config.get("base_url", "")
         endpoint = self.config.get(endpoint_key, "")
         
         # Format endpoint with any parameters (like model name)
@@ -264,6 +279,65 @@ class GenericAPIClient:
                     text = await response.text()
                     return {"text": text, "status": response.status}
     
+    async def stream_chat_completion(self, messages: list, model: str, **kwargs):
+        """Stream chat completion chunks. Currently implemented for Ollama."""
+        if self.provider_name != "ollama":
+            raise NotImplementedError("Streaming not implemented for this provider")
+        
+        url = self.get_url("chat_endpoint")
+        headers = self.get_headers()
+        options: Dict[str, Any] = {
+            "temperature": kwargs.get("temperature", 0.7)
+        }
+        if kwargs.get("max_tokens") is not None:
+            options["num_predict"] = kwargs.get("max_tokens")
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "options": options
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                buffer = ""
+                async for raw in response.content.iter_any():
+                    try:
+                        text = raw.decode("utf-8")
+                    except Exception:
+                        continue
+                    if not text:
+                        continue
+                    buffer += text
+                    # Normalize to lines
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        if line.startswith("data:"):
+                            line = line[5:].strip()
+                            if not line:
+                                continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            # Not a full JSON line yet; prepend back to buffer head
+                            buffer = line + "\n" + buffer
+                            break
+                        # Yield content
+                        chunk = None
+                        msg = obj.get("message") or {}
+                        if isinstance(msg, dict):
+                            chunk = msg.get("content")
+                        if not chunk:
+                            chunk = obj.get("response")
+                        if chunk:
+                            yield chunk
+                        # Stop early if Ollama signals completion
+                        if obj.get("done") is True:
+                            return
+    
     async def chat_completion(self, messages: list, model: str, **kwargs) -> Dict[str, Any]:
         """Generic chat completion that works with most providers"""
         
@@ -292,6 +366,22 @@ class GenericAPIClient:
                 "messages": messages,
                 "max_tokens": kwargs.get("max_tokens", 4096),
                 "temperature": kwargs.get("temperature", 0.7)
+            }
+            return await self.make_request("chat_endpoint", data=data)
+        
+        elif self.provider_name == "ollama":
+            # Ollama chat format
+            options: Dict[str, Any] = {
+                "temperature": kwargs.get("temperature", 0.7)
+            }
+            if kwargs.get("max_tokens") is not None:
+                # Ollama uses num_predict for max new tokens
+                options["num_predict"] = kwargs.get("max_tokens")
+            data = {
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "options": options
             }
             return await self.make_request("chat_endpoint", data=data)
             
