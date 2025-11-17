@@ -22,6 +22,7 @@ from rich.live import Live
 from rich.columns import Columns
 import threading
 import queue
+from typing import Optional
 
 # Suppress verbose logging from Google AI and other libraries
 os.environ['GRPC_VERBOSITY'] = 'NONE'
@@ -60,6 +61,35 @@ class FilteredStderr:
     def isatty(self):
         return self.original_stderr.isatty()
 
+    def __getattr__(self, name):
+        return getattr(self.original_stderr, name)
+
+    @property
+    def encoding(self):
+        return getattr(self.original_stderr, 'encoding', 'utf-8')
+
+    @property
+    def errors(self):
+        return getattr(self.original_stderr, 'errors', None)
+
+    def fileno(self):
+        return self.original_stderr.fileno()
+
+    def writable(self):
+        return True
+
+    def readable(self):
+        return False
+
+    def seekable(self):
+        return False
+
+    def close(self):
+        try:
+            self.original_stderr.close()
+        except Exception:
+            pass
+
 # Install the filtered stderr
 sys.stderr = FilteredStderr(sys.stderr)
 
@@ -78,14 +108,21 @@ from .websocket_server import WebSocketServer
 from .memory import MemoryManager
 from .rules import RulesManager
 from .confirmation import ConfirmationManager
+from . import __version__ as __cli_version__
 
 console = Console()
 
+def _show_version(ctx, param, value):
+    if not value or ctx.resilient_parsing:
+        return
+    click.echo(f"Cognautic CLI, version {__cli_version__}")
+    ctx.exit()
 
 class SlashCommandCompleter(Completer):
     """Auto-completer for slash commands"""
     
-    def __init__(self):
+    def __init__(self, workspace: Optional[str] = None):
+        self.workspace = workspace or os.getcwd()
         self.commands = {
             '/help': 'Show help information',
             '/workspace': 'Change working directory (alias: /ws)',
@@ -112,15 +149,16 @@ class SlashCommandCompleter(Completer):
             '/quit': 'Exit chat session',
         }
     
+    def set_workspace(self, workspace: str):
+        if workspace:
+            self.workspace = workspace
+    
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
         
         # Only show completions if the line starts with /
         if text.startswith('/'):
-            # Get the current word being typed
             word = text.split()[-1] if text.split() else text
-            
-            # Show all commands that match
             for cmd, description in self.commands.items():
                 if cmd.startswith(word):
                     yield Completion(
@@ -129,9 +167,51 @@ class SlashCommandCompleter(Completer):
                         display=cmd,
                         display_meta=description
                     )
+            return
+        
+        at_idx = text.rfind('@')
+        if at_idx != -1:
+            fragment = text[at_idx + 1:]
+            if not any(c.isspace() for c in fragment):
+                typed_path = fragment
+                import os as _os
+                typed_dir, typed_base = _os.path.split(typed_path)
+                if typed_dir in ('', '.'):  # relative to workspace
+                    fs_dir = self.workspace
+                else:
+                    expanded_dir = _os.path.expanduser(typed_dir)
+                    if not _os.path.isabs(expanded_dir):
+                        fs_dir = _os.path.normpath(_os.path.join(self.workspace, expanded_dir))
+                    else:
+                        fs_dir = expanded_dir
+                if typed_path.endswith('/'):
+                    base_dir_candidate = _os.path.expanduser(typed_path)
+                    if not _os.path.isabs(base_dir_candidate):
+                        fs_dir = _os.path.normpath(_os.path.join(self.workspace, base_dir_candidate))
+                    else:
+                        fs_dir = base_dir_candidate
+                    typed_dir, typed_base = typed_path, ''
+                try:
+                    for name in sorted(_os.listdir(fs_dir)):
+                        if not name.startswith(typed_base):
+                            continue
+                        full_path = _os.path.join(fs_dir, name)
+                        is_dir = _os.path.isdir(full_path)
+                        insertion_relative = name if typed_dir in ('', '.') else _os.path.join(typed_dir, name)
+                        insertion_text = '@' + (insertion_relative + ('/' if is_dir else ''))
+                        display_text = insertion_relative + ('/' if is_dir else '')
+                        yield Completion(
+                            insertion_text,
+                            start_position=-(len(text) - at_idx),
+                            display=display_text,
+                            display_meta=('dir' if is_dir else 'file')
+                        )
+                except Exception:
+                    pass
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.1.7", prog_name="Cognautic CLI")
+@click.option('-v', is_flag=True, is_eager=True, expose_value=False, callback=_show_version, help='Show the version and exit.')
+@click.version_option(version=__cli_version__, prog_name="Cognautic CLI")
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
@@ -380,9 +460,21 @@ def chat(provider, model, project_path, websocket_port, session):
                 confirmation_manager.toggle_yolo_mode()
                 event.app.current_buffer.text = ''
                 event.app.exit(result='__CONFIRMATION_TOGGLE__')
+
+            @bindings.add('tab')
+            def accept_or_complete(event):
+                buf = event.current_buffer
+                if buf.complete_state:
+                    comp = buf.complete_state.current_completion
+                    if comp is not None:
+                        buf.apply_completion(comp)
+                    else:
+                        buf.complete_next()
+                else:
+                    buf.start_completion(select_first=True)
             
             # Create prompt session with multi-line support and command completion
-            command_completer = SlashCommandCompleter()
+            command_completer = SlashCommandCompleter(current_workspace)
             session = PromptSession(
                 key_bindings=bindings,
                 multiline=True,  # Allow multi-line editing
@@ -516,9 +608,10 @@ def chat(provider, model, project_path, websocket_port, session):
                             multi_model_configs = context.get('multi_model_configs', multi_model_configs)
                             multi_model_folders = context.get('multi_model_folders', multi_model_folders)
                             
-                            # If workspace changed, update the session
-                            if old_workspace != current_workspace and memory_manager.get_current_session():
-                                memory_manager.update_session_info(workspace=current_workspace)
+                            if old_workspace != current_workspace:
+                                if memory_manager.get_current_session():
+                                    memory_manager.update_session_info(workspace=current_workspace)
+                                command_completer.set_workspace(current_workspace)
                             
                             continue
                         else:
@@ -1591,7 +1684,6 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         context['multi_model_configs'] = new_configs
         
         # Create folders for each model
-        from pathlib import Path
         import re
         
         current_workspace = context.get('current_workspace')
