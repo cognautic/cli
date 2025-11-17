@@ -31,9 +31,19 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 - **Local Model Support**: Run free open-source Hugging Face models locally without API keys (NEW! 🎉)
 - **Agentic Tools**: File operations, command execution, web search, and code analysis
 - **Intelligent Web Search**: Automatically searches the web when implementing features requiring current/external information (NEW! 🔍)
+- **Rules Management**: Define global and workspace rules to guide AI behavior
 - **Real-time Communication**: WebSocket server for live AI responses and tool execution
 - **Secure Configuration**: Encrypted API key storage and permission management
 - **Interactive CLI**: Rich terminal interface with progress indicators, colored output, and command history
+- **Terminal Mode**: Toggle between Chat and Terminal modes with `Shift+Tab` for seamless workflows
+- **Live Streaming with Tool Execution**: True real-time AI streaming and immediate tool execution during responses
+- **Smart Auto-Continuation**: Continues work automatically until `end_response` is called, reducing manual "continue" steps
+- **Background Commands**: Run long tasks in the background and manage them with `/ps` and `/ct <process_id>`
+- **Command Auto-Completion**: Tab-completion for slash commands with inline descriptions
+- **Safety Modes**: Confirmation prompts by default (Safe Mode) with quick toggle to YOLO mode via `/yolo` or `Ctrl+Y`
+- **Directory Context & Code Navigation**: Built-in tools for project structure awareness and symbol search/navigation
+- **Better Input & Exit Controls**: Multi-line input with `Alt+Enter` and safe exit with double `Ctrl+C`
+- **Multi-Model Testing**: Compare models side-by-side with `/mml ...`
 
 ---
 
@@ -166,17 +176,21 @@ Once you're in chat mode (`cognautic chat`), use these commands:
 /setup               # Run interactive setup wizard
 /config list         # Show current configuration
 /config set <key> <value>  # Set configuration value
+/config get <key>    # Get configuration value
+/config delete <key> # Delete configuration key
+/config reset        # Reset to defaults
 /help                # Show all available commands
 ```
 
 ### AI Provider & Model Management
 
 ```bash
-/provider [name]     # Switch AI provider (openai, anthropic, google, etc.)
-/model [model_id]    # Switch AI model
-/model list          # Fetch available models from provider's API
-/lmodel <path>       # Load local Hugging Face model
-/lmodel unload       # Unload current local model
+/provider [name]           # Switch AI provider (openai, anthropic, google, openrouter, together, ollama, etc.)
+/model [model_id]          # Switch AI model
+/model list                # Fetch available models from provider's API (supports Ollama via /api/tags)
+/lmodel <path>             # Load local Hugging Face model
+/lmodel unload             # Unload current local model
+/endpoint <prov> <url>     # Override provider base URL (e.g., ollama http://localhost:11434/api)
 ```
 
 ### Session Management
@@ -189,6 +203,7 @@ Once you're in chat mode (`cognautic chat`), use these commands:
 /session delete <id> # Delete session
 /session title <text> # Update session title
 ```
+Note: You can also load sessions by numeric index from `/session list` using `/session load <index>`.
 
 ### Display & Interface
 
@@ -196,6 +211,38 @@ Once you're in chat mode (`cognautic chat`), use these commands:
 /speed [instant|fast|normal|slow]  # Set typing speed
 /clear               # Clear chat screen
 /exit or /quit       # Exit chat session
+```
+
+### Safety & Confirmation
+
+```bash
+/yolo                 # Toggle between Safe (confirm) and YOLO (no confirm) modes
+```
+
+### Background Processes
+
+```bash
+/ps                   # List running background processes
+/ct <process_id>      # Terminate a background process by its ID
+```
+
+### Multi-Model Testing
+
+```bash
+/mml <prov1> <model1> [prov2] <model2> ...   # Run models side-by-side with live streaming
+# Example: /mml google gemini-2.5-flash openrouter gpt-4
+```
+
+### Rules Management
+
+```bash
+/rules                               # Display all rules (global + workspace)
+/rules add global <text> [desc]      # Add a global rule
+/rules add workspace <text> [desc]   # Add a workspace rule
+/rules remove global <index>         # Remove a global rule by index
+/rules remove workspace <index>      # Remove a workspace rule by index
+/rules clear global                  # Clear all global rules
+/rules clear workspace               # Clear all workspace rules
 ```
 
 ---
@@ -237,6 +284,15 @@ cognautic config reset                  # Reset to defaults
 cognautic providers                     # List all AI providers and endpoints
 ```
 
+### Key Bindings
+
+- **Enter**: Send message
+- **Alt+Enter**: New line (multi-line input)
+- **Shift+Tab**: Toggle Chat/Terminal mode
+- **Ctrl+C** (twice within 2s): Exit CLI
+- **Ctrl+Y**: Toggle YOLO/Safe mode
+- **Tab**: Auto-complete slash commands and `@` file paths (accept selection)
+
 ---
 
 ## Supported AI Providers
@@ -248,6 +304,7 @@ cognautic providers                     # List all AI providers and endpoints
 | **Google** | Gemini models | `GOOGLE_API_KEY` |
 | **Together AI** | Various open-source models | `TOGETHER_API_KEY` |
 | **OpenRouter** | Access to multiple providers | `OPENROUTER_API_KEY` |
+| **Ollama** | Local models via Ollama daemon | ❌ No API key needed! |
 | **Local Models** | Hugging Face models (Llama, Mistral, Phi, etc.) | ❌ No API key needed! |
 
 ### Using Local Models (NEW! 🎉)
@@ -529,6 +586,18 @@ You: /provider anthropic
 
 You: /model claude-3-sonnet-20240229
 ✅ Switched to model: claude-3-sonnet-20240229
+```
+
+### Using @ Path Suggestions
+
+Type `@` followed by a path fragment to get filesystem suggestions relative to the current workspace. Use Up/Down to navigate; press Tab to accept. Enter sends the message.
+
+```bash
+You [myproject]: Please review @README
+You [myproject]: Please review @README.md
+
+You [myproject]: Refactor @src/
+You [myproject]: Refactor @src/utils/
 ```
 
 ---
