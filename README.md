@@ -76,6 +76,9 @@ cd ~/Downloads
 
 # Install the wheel file
 pip install cognautic_cli-z.z.z-py3-none-any.whl
+
+#or (Now Available On PyPi)
+pip install cognautic-cli
 ```
 
 ### Installation with pipx (Recommended)
@@ -89,6 +92,9 @@ pipx ensurepath
 
 # Install Cognautic CLI with pipx
 pipx install cognautic_cli-z.z.z-py3-none-any.whl
+
+#or (Now Available On PyPi)
+pip install cognautic-cli
 ```
 
 ### Verify Installation
@@ -106,6 +112,9 @@ To update to a newer version, download the new wheel file and:
 ```bash
 # With pip (force reinstall)
 pip install cognautic_cli-y.y.y-py3-none-any.whl --force-reinstall
+
+#or
+pip install --upgrade cognautic-cli
 
 # With pipx
 pipx upgrade cognautic-cli
