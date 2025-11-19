@@ -109,6 +109,7 @@ from .memory import MemoryManager
 from .rules import RulesManager
 from .confirmation import ConfirmationManager
 from . import __version__ as __cli_version__
+from .voice_input import transcribe_once
 
 console = Console()
 
@@ -137,6 +138,8 @@ class SlashCommandCompleter(Completer):
             '/session': 'Manage chat sessions',
             '/speed': 'Set typing speed',
             '/yolo': 'Toggle YOLO mode (skip confirmations)',
+            '/voice': 'Capture voice and prefill prompt',
+            '/editor': 'Open vim editor for file editing',
             '/mml': 'Enable multi-model mode with specified providers/models',
             '/qmml': 'Quit multi-model mode',
             '/index': 'Show codebase index status',
@@ -432,6 +435,8 @@ def chat(provider, model, project_path, websocket_port, session):
             
             # Terminal mode state
             terminal_mode = [False]  # Use list to make it mutable in nested function
+            # Voice prefill buffer (set after Ctrl+G transcription)
+            voice_prefill = [""]
             
             # Initialize confirmation manager
             confirmation_manager = ConfirmationManager()
@@ -461,6 +466,11 @@ def chat(provider, model, project_path, websocket_port, session):
                 event.app.current_buffer.text = ''
                 event.app.exit(result='__CONFIRMATION_TOGGLE__')
 
+            @bindings.add('c-g')  # Ctrl+G to capture voice input and prefill
+            def toggle_voice(event):
+                event.app.current_buffer.text = ''
+                event.app.exit(result='__VOICE_TOGGLE__')
+
             @bindings.add('tab')
             def accept_or_complete(event):
                 buf = event.current_buffer
@@ -482,7 +492,7 @@ def chat(provider, model, project_path, websocket_port, session):
                 complete_while_typing=True  # Show completions as you type
             )
             
-            console.print("[dim]INFO: Press Shift+Tab to toggle between Chat and Terminal modes[/dim]\n")
+            console.print("[dim]INFO: Press Shift+Tab to toggle between Chat and Terminal modes; Ctrl+G for voice input[/dim]\n")
             
             while True:
                 try:
@@ -491,7 +501,10 @@ def chat(provider, model, project_path, websocket_port, session):
                     mode_indicator = "> " if terminal_mode[0] else ""
                     
                     prompt_text = HTML(f'<ansibrightcyan><b>{mode_indicator}You{workspace_info}:</b></ansibrightcyan> ')
-                    user_input = await session.prompt_async(prompt_text)
+                    user_input = await session.prompt_async(
+                        prompt_text,
+                        default=voice_prefill[0] if voice_prefill[0] else ""
+                    )
                     
                     # Handle mode toggle
                     if user_input == '__MODE_TOGGLE__':
@@ -505,8 +518,24 @@ def chat(provider, model, project_path, websocket_port, session):
                         confirmation_manager.display_mode_status()
                         continue
                     
+                    # Handle voice input toggle (one-shot transcription)
+                    if user_input == '__VOICE_TOGGLE__':
+                        console.print("[dim]Listening... Speak now[/dim]")
+                        try:
+                            text = await asyncio.to_thread(transcribe_once)
+                            voice_prefill[0] = text
+                            preview = text[:120] + ("..." if len(text) > 120 else "")
+                            console.print(f"[green]Voice captured[/green]: {preview}")
+                        except Exception as e:
+                            console.print(f"[red]Voice input failed:[/red] {e}")
+                        continue
+                    
                     if user_input.lower() in ['exit', 'quit']:
                         break
+                    
+                    # Clear voice prefill after a normal input is accepted
+                    if voice_prefill[0]:
+                        voice_prefill[0] = ""
                     
                     # Handle terminal mode
                     if terminal_mode[0]:
@@ -612,6 +641,10 @@ def chat(provider, model, project_path, websocket_port, session):
                                 if memory_manager.get_current_session():
                                     memory_manager.update_session_info(workspace=current_workspace)
                                 command_completer.set_workspace(current_workspace)
+                            
+                            # Propagate voice prefill from slash command (e.g., /voice)
+                            if 'voice_prefill' in context:
+                                voice_prefill[0] = context['voice_prefill'] or ""
                             
                             continue
                         else:
@@ -965,6 +998,17 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         show_help()
         return True
     
+    elif cmd == "voice":
+        console.print("[dim]Listening... Speak now[/dim]")
+        try:
+            text = await asyncio.to_thread(transcribe_once)
+            context['voice_prefill'] = text
+            preview = text[:120] + ("..." if len(text) > 120 else "")
+            console.print(f"[green]Voice captured[/green]: {preview}")
+        except Exception as e:
+            console.print(f"[red]Voice input failed:[/red] {e}")
+        return True
+    
     elif cmd == "workspace" or cmd == "ws":
         if len(parts) < 2:
             current = context.get('current_workspace')
@@ -1130,7 +1174,6 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     return True
                 
                 # Fetch models from API
-                import asyncio
                 import nest_asyncio
                 
                 # Allow nested event loops
@@ -1745,6 +1788,70 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             console.print("ERROR: Confirmation manager not available", style="red")
         return True
     
+    elif cmd == "editor":
+        # Open vim editor
+        import shutil
+        
+        # Check if vim is available
+        if not shutil.which('vim'):
+            console.print("ERROR: vim is not installed or not in PATH", style="red")
+            console.print("INFO: Install vim using your package manager (e.g., apt install vim, brew install vim)", style="yellow")
+            return True
+        
+        # Get file path if provided
+        file_path = None
+        if len(parts) >= 2:
+            file_input = " ".join(parts[1:])
+            
+            # Expand user home directory
+            file_path = Path(file_input).expanduser()
+            
+            # Handle relative vs absolute paths
+            if not file_path.is_absolute():
+                # Relative path from current workspace
+                current_workspace = context.get('current_workspace', os.getcwd())
+                file_path = Path(current_workspace) / file_path
+            
+            # Resolve to absolute path
+            file_path = file_path.resolve()
+        
+        try:
+            # Clear the screen before opening vim
+            console.clear()
+            
+            # Build vim command with Ctrl+E keybindings
+            vim_cmd = ['vim']
+            
+            # Add keybindings via -c flag (execute commands on startup)
+            # Map Ctrl+E to save and quit in all modes
+            vim_cmd.extend([
+                '-c', 'nnoremap <C-e> :wqa<CR>',
+                '-c', 'inoremap <C-e> <Esc>:wqa<CR>',
+                '-c', 'vnoremap <C-e> <Esc>:wqa<CR>',
+            ])
+            
+            # Add file path if provided
+            if file_path:
+                vim_cmd.append(str(file_path))
+                console.print(f"[dim]Opening vim with: {file_path}[/dim]")
+            else:
+                console.print("[dim]Opening vim[/dim]")
+            
+            console.print("[dim]Press Ctrl+E in vim to save and exit, or :q! to quit without saving[/dim]\n")
+            
+            # Launch vim
+            result = subprocess.run(vim_cmd)
+            
+            # Clear screen and show welcome back message
+            console.clear()
+            console.print("[green]INFO: Returned to chat mode[/green]\n")
+            
+        except Exception as e:
+            console.print(f"[red]ERROR: Failed to open vim: {str(e)}[/red]")
+        
+        return True
+
+    
     elif cmd == "exit" or cmd == "quit":
         return False
     
@@ -1790,6 +1897,7 @@ def show_help():
     help_text.append("  - /index stats - Show detailed index statistics\n", style="dim")
     help_text.append("• /ps or /processes - List all running background processes\n")
     help_text.append("• /ct <process_id> or /cancel <process_id> - Terminate a background process\n")
+    help_text.append("• /editor [filepath] - Open vim editor (Ctrl+E to exit vim)\n")
     help_text.append("• /clear - Clear chat screen\n")
     help_text.append("\n")
     help_text.append("Multi-Model Mode:\n", style="bold cyan")

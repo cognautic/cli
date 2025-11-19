@@ -4,6 +4,90 @@
 
 ⚠️ **Under Development** - Some features may be unavailable
 
+## Voice Input (NEW)
+
+Cognautic CLI supports one-shot speech-to-text to quickly prefill your prompt.
+
+### Installation
+
+- Recommended (extras):
+  - `pip install -e .[voice]`
+- Or install dependencies directly:
+  - `pip install SpeechRecognition PyAudio`
+- Linux note: PyAudio often requires PortAudio headers first:
+  - Debian/Ubuntu: `sudo apt install portaudio19-dev`
+
+### Usage
+
+- Press `Ctrl+G` in the chat prompt to start a one-shot capture. After you speak, the recognized text is prefilled as the next prompt so you can edit or send.
+- Use the slash command `/voice` to capture once and prefill the next prompt.
+
+### Troubleshooting
+
+- ALSA warnings: The CLI suppresses common ALSA/libportaudio stderr noise while accessing the microphone.
+- "No default microphone": Ensure a working input device is selected and not in use by another app.
+- Network required: The default recognizer uses Google's Web Speech API.
+- Prefer offline STT (e.g., Vosk or faster-whisper)? Open an issue to request integration.
+
+---
+
+## Vim Editor Integration (NEW)
+
+Cognautic CLI now includes built-in vim editor integration, allowing you to edit files directly from the chat interface without leaving the terminal.
+
+### Installation
+
+Vim must be installed on your system:
+
+```bash
+# On Arch Linux
+sudo pacman -S vim
+
+# On Debian/Ubuntu
+sudo apt install vim
+
+# On macOS
+brew install vim
+```
+
+### Usage
+
+#### Open vim without a file
+```bash
+/editor
+```
+Opens vim in an empty buffer. Perfect for quick notes or scratch work.
+
+#### Open vim with a specific file
+```bash
+/editor myfile.txt
+/editor src/main.py
+/editor /absolute/path/to/file.js
+```
+Opens vim with the specified file. Supports both relative (to current workspace) and absolute paths.
+
+#### Editing and returning to chat
+
+1. Make your changes in vim
+2. Press **Ctrl+E** to save and exit back to chat
+3. Or use `:wq` to save and quit, or `:q!` to quit without saving
+
+**Key Features:**
+- ✅ Seamless integration - edit files without leaving Cognautic
+- ✅ Ctrl+E shortcut - quick save and return to chat
+- ✅ Path support - works with relative and absolute paths
+- ✅ Workspace aware - relative paths are resolved from current workspace
+
+**Example workflow:**
+```bash
+You: /editor config.json
+# Vim opens, you make changes, press Ctrl+E
+INFO: Returned to chat mode
+
+You: I've updated the configuration file
+AI: Great! Let me review those changes...
+```
+
 ---
 
 ## Overview
@@ -218,6 +302,7 @@ Note: You can also load sessions by numeric index from `/session list` using `/s
 
 ```bash
 /speed [instant|fast|normal|slow]  # Set typing speed
+/editor [filepath]   # Open vim editor (Ctrl+E to save and exit)
 /clear               # Clear chat screen
 /exit or /quit       # Exit chat session
 ```
@@ -300,6 +385,7 @@ cognautic providers                     # List all AI providers and endpoints
 - **Shift+Tab**: Toggle Chat/Terminal mode
 - **Ctrl+C** (twice within 2s): Exit CLI
 - **Ctrl+Y**: Toggle YOLO/Safe mode
+- **Ctrl+G**: One-shot voice capture to prefill the next prompt
 - **Tab**: Auto-complete slash commands and `@` file paths (accept selection)
 
 ---
