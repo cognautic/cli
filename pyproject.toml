@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cognautic-cli"
-version = "1.1.9"
+version = "1.1.10"
 description = "A Python-based CLI AI coding agent that provides agentic development capabilities with multi-provider AI support and real-time interaction"
 readme = "README.md"
 license = "MIT"
@@ -47,6 +47,7 @@ dependencies = [
     "together>=0.2.0",
     "nest-asyncio>=1.5.0",
     "prompt-toolkit>=3.0.0",
+    "mcp>=0.1.0",
 ]
 
 [project.optional-dependencies]

@@ -110,6 +110,7 @@ from .rules import RulesManager
 from .confirmation import ConfirmationManager
 from . import __version__ as __cli_version__
 from .voice_input import transcribe_once
+from .mcp_commands import handle_mcp_command
 
 console = Console()
 
@@ -150,6 +151,12 @@ class SlashCommandCompleter(Completer):
             '/clear': 'Clear chat screen',
             '/exit': 'Exit chat session',
             '/quit': 'Exit chat session',
+            '/mcp': 'Manage MCP server connections',
+            '/mcp-list': 'List connected MCP servers',
+            '/mcp-connect': 'Connect to an MCP server',
+            '/mcp-disconnect': 'Disconnect from an MCP server',
+            '/mcp-tools': 'List tools from MCP servers',
+            '/mcp-resources': 'List resources from MCP servers',
         }
     
     def set_workspace(self, workspace: str):
@@ -1851,6 +1858,10 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         
         return True
 
+    
+    elif cmd == "mcp" or cmd.startswith("mcp-"):
+        # Handle MCP commands
+        return await handle_mcp_command(cmd, parts, context)
     
     elif cmd == "exit" or cmd == "quit":
         return False

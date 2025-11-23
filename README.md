@@ -88,6 +88,106 @@ You: I've updated the configuration file
 AI: Great! Let me review those changes...
 ```
 
+```
+
+---
+
+## MCP (Model Context Protocol) Support (NEW! 🔌)
+
+Cognautic CLI now supports the **Model Context Protocol (MCP)**, an open standard by Anthropic for connecting AI systems with external data sources and tools.
+
+### What is MCP?
+
+MCP allows Cognautic to:
+- **Connect to external MCP servers** to access their tools, resources, and prompts
+- **Expose its own capabilities** as an MCP server for other clients to use
+
+### Quick Start
+
+```bash
+# Start Cognautic CLI
+cognautic chat
+
+# View MCP help
+/mcp
+
+# Connect to a server
+/mcp connect filesystem
+
+# List available tools
+/mcp tools
+
+# Use MCP tools naturally
+You: Use the filesystem MCP server to list all Python files in my project
+```
+
+### Available Commands
+
+- `/mcp` - Show MCP help
+- `/mcp list` - List connected MCP servers
+- `/mcp connect <server>` - Connect to a configured server
+- `/mcp disconnect <server>` - Disconnect from a server
+- `/mcp tools` - List all available tools from connected servers
+- `/mcp resources` - List all available resources
+- `/mcp config` - Show MCP server configurations
+
+### Pre-configured Servers
+
+Cognautic includes default configurations for popular MCP servers:
+
+1. **Filesystem Server** - Access local files and directories
+   ```bash
+   /mcp connect filesystem
+   ```
+
+2. **GitHub Server** - Interact with GitHub repositories
+   ```bash
+   # Configure your token in ~/.cognautic/mcp_servers.json first
+   /mcp connect github
+   ```
+
+3. **PostgreSQL Server** - Query PostgreSQL databases
+   ```bash
+   # Configure connection string in ~/.cognautic/mcp_servers.json first
+   /mcp connect postgres
+   ```
+
+### Configuration
+
+MCP servers are configured in `~/.cognautic/mcp_servers.json`:
+
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"],
+      "env": {},
+      "transport": "stdio"
+    }
+  }
+}
+```
+
+### Installing MCP Servers
+
+```bash
+# Install filesystem server
+npm install -g @modelcontextprotocol/server-filesystem
+
+# Install GitHub server
+npm install -g @modelcontextprotocol/server-github
+
+# Install PostgreSQL server
+npm install -g @modelcontextprotocol/server-postgres
+```
+
+### Documentation
+
+- **[MCP_SUPPORT.md](MCP_SUPPORT.md)** - Comprehensive guide with architecture and troubleshooting
+- **[MCP_QUICK_REFERENCE.md](MCP_QUICK_REFERENCE.md)** - Quick reference and common commands
+- **[modelcontextprotocol.io](https://modelcontextprotocol.io)** - Official MCP specification
+
 ---
 
 ## Overview
@@ -113,6 +213,7 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 
 - **Multi-Provider AI Support**: Integrate with OpenAI, Anthropic, Google, Together AI, OpenRouter, and 15+ other AI providers
 - **Local Model Support**: Run free open-source Hugging Face models locally without API keys (NEW! 🎉)
+- **MCP (Model Context Protocol) Support**: Connect to external MCP servers and expose Cognautic's capabilities (NEW! 🔌)
 - **Agentic Tools**: File operations, command execution, web search, and code analysis
 - **Intelligent Web Search**: Automatically searches the web when implementing features requiring current/external information (NEW! 🔍)
 - **Rules Management**: Define global and workspace rules to guide AI behavior
