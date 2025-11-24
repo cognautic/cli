@@ -115,7 +115,7 @@ class MCPServer:
             "capabilities": self.capabilities,
             "serverInfo": {
                 "name": "cognautic-cli",
-                "version": "1.1.10"
+                "version": "1.1.10-1"
             }
         }
         await self._send_response(result, msg_id)

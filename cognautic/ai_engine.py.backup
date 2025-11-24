@@ -1628,69 +1628,6 @@ class AIEngine:
                         {"type": "error", "error": result.error, "success": False}
                     )
 
-            else:
-                # Generic handler for all other tools (including MCP tools)
-                # Check if tool exists in registry
-                tool = self.tool_registry.get_tool(tool_name)
-                
-                if not tool:
-                    content = [f"Unknown tool: {tool_name}"]
-                    box = self._format_tool_box("ERROR: Unknown Tool", content)
-                    yield box
-                    tool_results.append(
-                        {"type": "error", "error": f"Unknown tool: {tool_name}", "success": False}
-                    )
-                    return
-                
-                # Execute tool via registry
-                result = await self.tool_registry.execute_tool(
-                    tool_name,
-                    user_id="ai_engine",
-                    **args
-                )
-                
-                if result.success:
-                    # Format result data
-                    result_data = result.data if result.data is not None else "Operation completed successfully"
-                    
-                    # Convert result to string if it's not already
-                    if isinstance(result_data, dict):
-                        import json
-                        result_str = json.dumps(result_data, indent=2)
-                    elif isinstance(result_data, list):
-                        result_str = '\n'.join(str(item) for item in result_data)
-                    else:
-                        result_str = str(result_data)
-                    
-                    # Truncate if too long
-                    if len(result_str) > 5000:
-                        result_str = result_str[:5000] + "\n\n... [Output truncated]"
-                    
-                    # Create formatted output
-                    content = [f"Tool: {tool_name}", "", "Result:"]
-                    result_lines = result_str.split('\n')[:20]  # First 20 lines
-                    for line in result_lines:
-                        content.append(line[:100])  # Truncate long lines
-                    if len(result_str.split('\n')) > 20:
-                        content.append("...")
-                    
-                    box = self._format_tool_box(f"TOOL: {tool_name}", content)
-                    yield box
-                    
-                    tool_results.append({
-                        "type": "tool",
-                        "tool": tool_name,
-                        "result": result_str,
-                        "success": True
-                    })
-                else:
-                    content = [str(result.error)]
-                    box = self._format_tool_box(f"ERROR: {tool_name}", content)
-                    yield box
-                    tool_results.append(
-                        {"type": "error", "error": result.error, "success": False}
-                    )
-
         except Exception as e:
             content = [str(e)]
             box = self._format_tool_box("TOOL ERROR", content)

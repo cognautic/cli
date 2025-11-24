@@ -448,6 +448,12 @@ def chat(provider, model, project_path, websocket_port, session):
             # Initialize confirmation manager
             confirmation_manager = ConfirmationManager()
             
+            # Initialize MCP manager and config
+            from .mcp_client import MCPClientManager
+            from .mcp_config import MCPConfigManager
+            mcp_manager = MCPClientManager()
+            mcp_config = MCPConfigManager()
+            
             # Setup key bindings for Shift+Tab toggle and multi-line support
             bindings = KeyBindings()
             
@@ -631,7 +637,10 @@ def chat(provider, model, project_path, websocket_port, session):
                             'multi_model_mode': multi_model_mode,
                             'multi_model_configs': multi_model_configs,
                             'multi_model_folders': multi_model_folders,
-                            'original_workspace': original_workspace
+                            'original_workspace': original_workspace,
+                            'mcp_manager': mcp_manager,
+                            'mcp_config': mcp_config,
+                            'ai_engine': ai_engine
                         }
                         result = await handle_slash_command(user_input, config_manager, ai_engine, context)
                         if result:
@@ -845,6 +854,12 @@ def chat(provider, model, project_path, websocket_port, session):
             # Save command history
             try:
                 readline.write_history_file(str(history_file))
+            except Exception:
+                pass
+            
+            # Cleanup MCP connections
+            try:
+                await mcp_manager.disconnect_all()
             except Exception:
                 pass
             

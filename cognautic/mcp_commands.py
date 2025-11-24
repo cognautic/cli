@@ -9,16 +9,13 @@ console = Console()
 
 async def handle_mcp_command(cmd, parts, context):
     """Handle MCP-related slash commands"""
-    from .mcp_client import MCPClientManager, MCPServerConfig, MCPTransportType
-    from .mcp_config import MCPConfigManager
+    # Get MCP manager and config from context (they should already be initialized)
+    mcp_manager = context.get('mcp_manager')
+    mcp_config = context.get('mcp_config')
     
-    # Initialize MCP manager if not already in context
-    if 'mcp_manager' not in context:
-        context['mcp_manager'] = MCPClientManager()
-        context['mcp_config'] = MCPConfigManager()
-    
-    mcp_manager = context['mcp_manager']
-    mcp_config = context['mcp_config']
+    if not mcp_manager or not mcp_config:
+        console.print("[red]ERROR: MCP manager not initialized[/red]")
+        return True
     
     if cmd == "mcp" and len(parts) == 1:
         # Show MCP help
@@ -78,6 +75,18 @@ async def handle_mcp_command(cmd, parts, context):
             console.print(f"  Resources: {len(client.resources)}")
             console.print(f"  Prompts: {len(client.prompts)}")
             
+            # Register MCP tools with AI engine if available
+            if context.get('ai_engine') and len(client.tools) > 0:
+                from cognautic.tools.mcp_wrapper import register_mcp_tools
+                try:
+                    tools_registered = register_mcp_tools(
+                        context['ai_engine'].tool_registry,
+                        mcp_manager
+                    )
+                    console.print(f"[green]SUCCESS Registered {tools_registered} MCP tools with AI engine[/green]")
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Could not register MCP tools: {e}[/yellow]")
+            
             # Show troubleshooting hint if no capabilities discovered
             if len(client.tools) == 0 and len(client.resources) == 0 and len(client.prompts) == 0:
                 console.print("\n[yellow]Warning: Server connected but no capabilities discovered.[/yellow]")
@@ -99,6 +108,20 @@ async def handle_mcp_command(cmd, parts, context):
             return True
         
         server_name = parts[2] if cmd == "mcp" else parts[1]
+        
+        # Unregister tools before disconnecting
+        if context.get('ai_engine'):
+            from cognautic.tools.mcp_wrapper import unregister_mcp_tools
+            try:
+                tools_unregistered = unregister_mcp_tools(
+                    context['ai_engine'].tool_registry,
+                    server_name
+                )
+                if tools_unregistered > 0:
+                    console.print(f"[dim]Unregistered {tools_unregistered} MCP tools[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not unregister MCP tools: {e}[/yellow]")
+        
         success = await mcp_manager.remove_server(server_name)
         
         if success:
