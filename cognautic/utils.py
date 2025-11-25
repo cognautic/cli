@@ -22,6 +22,54 @@ def ensure_directory(path: str) -> Path:
     return dir_path
 
 
+def is_restricted_directory(path: str) -> tuple[bool, Optional[str]]:
+    """
+    Check if a directory is restricted for running Cognautic CLI.
+    
+    Restricted directories include:
+    - User home directory (Linux/Mac: ~, Windows: C:\\Users\\username)
+    - /man directory on Linux
+    - C:\\ drive root on Windows
+    
+    Args:
+        path: The directory path to check
+        
+    Returns:
+        A tuple of (is_restricted: bool, reason: Optional[str])
+    """
+    try:
+        # Resolve to absolute path
+        abs_path = Path(path).resolve()
+        
+        # Get home directory
+        home_dir = Path.home().resolve()
+        
+        # Check if path is the home directory
+        if abs_path == home_dir:
+            return True, f"Cannot run Cognautic CLI in your home directory ({home_dir}). Please navigate to a specific project directory."
+        
+        # Check for /man directory on Linux/Unix
+        if sys.platform in ['linux', 'darwin']:
+            man_dir = Path('/man').resolve()
+            if abs_path == man_dir or str(abs_path).startswith('/man/'):
+                return True, "Cannot run Cognautic CLI in the /man directory."
+        
+        # Check for C:\ root on Windows
+        if sys.platform == 'win32':
+            # Check if it's a drive root (e.g., C:\, D:\)
+            if abs_path.parent == abs_path:  # This is true for drive roots
+                drive_letter = str(abs_path).upper()
+                if drive_letter.startswith('C:'):
+                    return True, f"Cannot run Cognautic CLI in the C:\\ drive root. Please navigate to a specific project directory."
+        
+        return False, None
+        
+    except Exception as e:
+        # If there's an error resolving the path, allow it and let other validation handle it
+        console.print(f"[dim]Warning: Could not validate directory restriction: {e}[/dim]")
+        return False, None
+
+
 def load_json_file(file_path: str) -> Dict[str, Any]:
     """Load JSON file safely"""
     try:

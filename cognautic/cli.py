@@ -111,8 +111,10 @@ from .confirmation import ConfirmationManager
 from . import __version__ as __cli_version__
 from .voice_input import transcribe_once
 from .mcp_commands import handle_mcp_command
+from .utils import is_restricted_directory
 
 console = Console()
+
 
 def _show_version(ctx, param, value):
     if not value or ctx.resilient_parsing:
@@ -391,6 +393,14 @@ def chat(provider, model, project_path, websocket_port, session):
             
             # Set workspace - use provided project_path or current working directory
             current_workspace = project_path or os.getcwd()
+            
+            # Validate that the workspace is not a restricted directory
+            is_restricted, restriction_reason = is_restricted_directory(current_workspace)
+            if is_restricted:
+                console.print(f"ERROR: {restriction_reason}", style="bold red")
+                console.print("INFO: Please navigate to a specific project directory and try again.", style="yellow")
+                return
+            
             # Load saved provider/model from config if not specified
             saved_provider = config_manager.get_config_value('last_provider')
             saved_model = config_manager.get_config_value('last_model')
@@ -1055,9 +1065,15 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             new_path = new_path.resolve()
             
             if new_path.exists() and new_path.is_dir():
-                context['current_workspace'] = str(new_path)
-                console.print(f"SUCCESS: Workspace changed to: {new_path}")
-                console.print(f"INFO: AI will now create files in this directory")
+                # Validate that the new workspace is not a restricted directory
+                is_restricted, restriction_reason = is_restricted_directory(str(new_path))
+                if is_restricted:
+                    console.print(f"ERROR: {restriction_reason}", style="bold red")
+                    console.print("INFO: Please choose a specific project directory.", style="yellow")
+                else:
+                    context['current_workspace'] = str(new_path)
+                    console.print(f"SUCCESS: Workspace changed to: {new_path}")
+                    console.print(f"INFO: AI will now create files in this directory")
             else:
                 console.print(f"ERROR: Directory not found: {new_path}", style="red")
         return True
