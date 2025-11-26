@@ -35,3 +35,5 @@ The AI would perform a search, but in the next step would say "It seems the prev
 
 **After:**
 The AI successfully sees the search results and uses the information to answer questions or generate code.
+
+---
