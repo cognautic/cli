@@ -1567,12 +1567,36 @@ class AIEngine:
                 if result.success:
                     operation = args.get("operation", "search_web")
                     query = args.get("query", "N/A")
-                    content = [f"Operation: {operation}", f"Query:     {query}"]
+                    
+                    # Format for UI
+                    content = [f"Operation: {operation}"]
+                    if query != "N/A":
+                        content.append(f"Query:     {query}")
+                    
+                    if isinstance(result.data, list):
+                        # It's a list of results
+                        content.append(f"Found {len(result.data)} results")
+                        for i, item in enumerate(result.data[:3]):
+                            title = item.get('title', 'No title')
+                            content.append(f"{i+1}. {title[:50]}...")
+                    elif isinstance(result.data, dict):
+                        # It might be fetch_url_content result
+                        url = result.data.get('url', 'unknown')
+                        content.append(f"URL: {url}")
+                        text_len = result.data.get('length', 0)
+                        content.append(f"Length: {text_len} chars")
+                    
                     box = self._format_tool_box("TOOL: web_search", content)
                     yield box
-                    tool_results.append(
-                        {"type": "web_search", "operation": operation, "success": True}
-                    )
+
+                    # Add to tool results with FULL results
+                    tool_results.append({
+                        "type": "web_search",
+                        "operation": operation,
+                        "query": query,
+                        "results": result.data,
+                        "success": True
+                    })
                 else:
                     content = [str(result.error)]
                     box = self._format_tool_box("ERROR: web_search", content)
@@ -1627,6 +1651,7 @@ class AIEngine:
                     tool_results.append(
                         {"type": "error", "error": result.error, "success": False}
                     )
+
 
             else:
                 # Generic handler for all other tools (including MCP tools)

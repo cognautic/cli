@@ -286,6 +286,27 @@ Continue now:"""
                     tool_results_text += f"{'='*70}\n"
                     tool_results_text += f"{output}\n"
                     tool_results_text += f"{'='*70}\n"
+                elif result.get("type") == "web_search":
+                    # Include web search results
+                    query = result.get("query", "unknown")
+                    results = result.get("results", [])
+                    
+                    tool_results_text += f"\n\n{'='*70}\n"
+                    tool_results_text += f"WEB SEARCH RESULTS: {query}\n"
+                    tool_results_text += f"{'='*70}\n"
+                    
+                    if isinstance(results, list):
+                        for i, item in enumerate(results):
+                            tool_results_text += f"Result {i+1}:\n"
+                            tool_results_text += f"Title: {item.get('title', 'N/A')}\n"
+                            tool_results_text += f"URL: {item.get('url', 'N/A')}\n"
+                            tool_results_text += f"Snippet: {item.get('snippet', 'N/A')}\n"
+                            tool_results_text += "-" * 30 + "\n"
+                    elif isinstance(results, dict):
+                         # Handle fetch_url_content or other single-object returns
+                         tool_results_text += str(results) + "\n"
+                         
+                    tool_results_text += f"{'='*70}\n"
             
             # Build continuation prompt
             continuation_prompt = self.build_continuation_prompt(tool_results)
