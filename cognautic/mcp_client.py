@@ -116,7 +116,7 @@ class MCPClient:
                 },
                 "clientInfo": {
                     "name": "cognautic-cli",
-                    "version": "1.1.10-3"
+                    "version": "1.2.0"
                 }
             })
             

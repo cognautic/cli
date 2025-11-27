@@ -159,6 +159,7 @@ class SlashCommandCompleter(Completer):
             '/mcp-disconnect': 'Disconnect from an MCP server',
             '/mcp-tools': 'List tools from MCP servers',
             '/mcp-resources': 'List resources from MCP servers',
+            '/plugin': 'Manage plugins (install, list, load, unload)',
         }
     
     def set_workspace(self, workspace: str):
@@ -464,6 +465,25 @@ def chat(provider, model, project_path, websocket_port, session):
             mcp_manager = MCPClientManager()
             mcp_config = MCPConfigManager()
             
+            # Initialize plugin manager
+            from .plugin_manager import PluginManager
+            plugin_manager = PluginManager()
+            
+            # Initialize plugin API early so plugins can be loaded before first message
+            plugin_context = {
+                'current_workspace': current_workspace,
+                'model': current_model,
+                'provider': current_provider,
+                'memory_manager': memory_manager,
+                'config_manager': config_manager,
+                'ai_engine': ai_engine,
+                'tool_registry': ai_engine.tool_registry if hasattr(ai_engine, 'tool_registry') else None
+            }
+            plugin_manager.initialize_api(plugin_context)
+            
+            # Load all enabled plugins at startup
+            await plugin_manager.load_all_plugins()
+            
             # Setup key bindings for Shift+Tab toggle and multi-line support
             bindings = KeyBindings()
             
@@ -650,7 +670,8 @@ def chat(provider, model, project_path, websocket_port, session):
                             'original_workspace': original_workspace,
                             'mcp_manager': mcp_manager,
                             'mcp_config': mcp_config,
-                            'ai_engine': ai_engine
+                            'ai_engine': ai_engine,
+                            'plugin_manager': plugin_manager
                         }
                         result = await handle_slash_command(user_input, config_manager, ai_engine, context)
                         if result:
@@ -1894,10 +1915,146 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         # Handle MCP commands
         return await handle_mcp_command(cmd, parts, context)
     
+    elif cmd == "plugin":
+        # Handle plugin commands
+        plugin_manager = context.get('plugin_manager')
+        if not plugin_manager:
+            console.print("ERROR: Plugin manager not available", style="red")
+            return True
+        
+        if len(parts) < 2:
+            console.print("Available plugin commands:", style="bold")
+            console.print("• /plugin install <path> - Install a plugin from a directory")
+            console.print("• /plugin list - List all installed plugins")
+            console.print("• /plugin load <name> - Load a plugin")
+            console.print("• /plugin unload <name> - Unload a plugin")
+            console.print("• /plugin uninstall <name> - Uninstall a plugin")
+            console.print("• /plugin info <name> - Show plugin information")
+            return True
+        
+        subcmd = parts[1].lower()
+        
+        if subcmd == "install":
+            if len(parts) < 3:
+                console.print("ERROR: Usage: /plugin install <path>", style="red")
+                return True
+            
+            plugin_path = " ".join(parts[2:])
+            
+            # Expand user home directory
+            plugin_path = Path(plugin_path).expanduser()
+            
+            # Handle relative vs absolute paths
+            if not plugin_path.is_absolute():
+                original_cwd = context.get('original_cwd', os.getcwd())
+                plugin_path = Path(original_cwd) / plugin_path
+            
+            plugin_path = plugin_path.resolve()
+            
+            console.print(f"Installing plugin from: {plugin_path}")
+            if await plugin_manager.install_plugin(str(plugin_path)):
+                console.print("SUCCESS: Plugin installed and loaded successfully!", style="green")
+                console.print("INFO: Plugin is ready to use", style="dim")
+            else:
+                console.print("ERROR: Failed to install plugin", style="red")
+        
+        elif subcmd == "list":
+            plugins = plugin_manager.list_installed_plugins()
+            if not plugins:
+                console.print("No plugins installed", style="dim")
+                console.print("INFO: Use /plugin install <path> to install a plugin", style="dim")
+            else:
+                console.print(f"\n[bold]Installed Plugins ({len(plugins)}):[/bold]\n")
+                for plugin in plugins:
+                    status = "✓ Loaded" if plugin['loaded'] else ("○ Enabled" if plugin['enabled'] else "✗ Disabled")
+                    status_color = "green" if plugin['loaded'] else ("yellow" if plugin['enabled'] else "red")
+                    console.print(f"  [{status_color}]{status}[/{status_color}] {plugin['name']} v{plugin['version']}")
+                    console.print(f"    {plugin['description']}", style="dim")
+                    console.print(f"    Author: {plugin['author']}", style="dim")
+                    console.print(f"    Path: {plugin['path']}", style="dim")
+                    console.print()
+        
+        elif subcmd == "load":
+            if len(parts) < 3:
+                console.print("ERROR: Usage: /plugin load <name>", style="red")
+                return True
+            
+            plugin_name = parts[2]
+            console.print(f"Loading plugin: {plugin_name}")
+            if await plugin_manager.load_plugin(plugin_name):
+                console.print(f"SUCCESS: Plugin '{plugin_name}' loaded successfully!", style="green")
+            else:
+                console.print(f"ERROR: Failed to load plugin '{plugin_name}'", style="red")
+        
+        elif subcmd == "unload":
+            if len(parts) < 3:
+                console.print("ERROR: Usage: /plugin unload <name>", style="red")
+                return True
+            
+            plugin_name = parts[2]
+            console.print(f"Unloading plugin: {plugin_name}")
+            if await plugin_manager.unload_plugin(plugin_name):
+                console.print(f"SUCCESS: Plugin '{plugin_name}' unloaded successfully!", style="green")
+            else:
+                console.print(f"ERROR: Failed to unload plugin '{plugin_name}'", style="red")
+        
+        elif subcmd == "uninstall":
+            if len(parts) < 3:
+                console.print("ERROR: Usage: /plugin uninstall <name>", style="red")
+                return True
+            
+            plugin_name = parts[2]
+            console.print(f"Uninstalling plugin: {plugin_name}")
+            if plugin_manager.uninstall_plugin(plugin_name):
+                console.print(f"SUCCESS: Plugin '{plugin_name}' uninstalled successfully!", style="green")
+            else:
+                console.print(f"ERROR: Failed to uninstall plugin '{plugin_name}'", style="red")
+        
+        elif subcmd == "info":
+            if len(parts) < 3:
+                console.print("ERROR: Usage: /plugin info <name>", style="red")
+                return True
+            
+            plugin_name = parts[2]
+            plugins = plugin_manager.list_installed_plugins()
+            plugin_info = next((p for p in plugins if p['name'] == plugin_name), None)
+            
+            if plugin_info:
+                console.print(f"\n[bold cyan]Plugin: {plugin_info['name']}[/bold cyan]")
+                console.print(f"Version: {plugin_info['version']}")
+                console.print(f"Description: {plugin_info['description']}")
+                console.print(f"Author: {plugin_info['author']}")
+                console.print(f"Path: {plugin_info['path']}")
+                console.print(f"Status: {'Loaded' if plugin_info['loaded'] else ('Enabled' if plugin_info['enabled'] else 'Disabled')}")
+                
+                # Show registered commands if loaded
+                if plugin_info['loaded']:
+                    plugin_instance = plugin_manager.get_plugin(plugin_name)
+                    if plugin_instance and plugin_manager.plugin_api:
+                        commands = plugin_manager.plugin_api.list_commands()
+                        if commands:
+                            console.print("\nRegistered Commands:")
+                            for cmd, desc in commands.items():
+                                console.print(f"  /{cmd} - {desc}")
+            else:
+                console.print(f"ERROR: Plugin '{plugin_name}' not found", style="red")
+        
+        else:
+            console.print(f"ERROR: Unknown plugin command: {subcmd}", style="red")
+        
+        return True
+    
     elif cmd == "exit" or cmd == "quit":
         return False
     
     else:
+        # Check if this is a plugin command
+        plugin_manager = context.get('plugin_manager')
+        if plugin_manager:
+            handled = await plugin_manager.handle_plugin_command(cmd, parts[1:] if len(parts) > 1 else [], context)
+            if handled:
+                return True
+        
         console.print(f"ERROR: Unknown command: /{cmd}. Type /help for available commands.", style="red")
         return True
 
@@ -1941,6 +2098,11 @@ def show_help():
     help_text.append("• /ct <process_id> or /cancel <process_id> - Terminate a background process\n")
     help_text.append("• /editor [filepath] - Open vim editor (Ctrl+E to exit vim)\n")
     help_text.append("• /clear - Clear chat screen\n")
+    help_text.append("• /plugin [install|list|load|unload|uninstall|info] - Manage plugins\n", style="bold magenta")
+    help_text.append("  - /plugin install <path> - Install a plugin from a directory\n", style="dim")
+    help_text.append("  - /plugin list - List all installed plugins\n", style="dim")
+    help_text.append("  - /plugin load <name> - Load a plugin\n", style="dim")
+    help_text.append("  - /plugin unload <name> - Unload a plugin\n", style="dim")
     help_text.append("\n")
     help_text.append("Multi-Model Mode:\n", style="bold cyan")
     help_text.append("• Chat with multiple AI models simultaneously for comparison\n", style="green")

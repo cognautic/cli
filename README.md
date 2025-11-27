@@ -190,6 +190,148 @@ npm install -g @modelcontextprotocol/server-postgres
 
 ---
 
+## Plugin System (NEW! 🔌)
+
+Cognautic CLI features a powerful plugin system that allows you to extend its functionality with custom commands, tools, and features without modifying the core codebase.
+
+### What are Plugins?
+
+Plugins are self-contained extensions that can:
+- **Add custom slash commands** (e.g., `/debug`, `/format`, `/test`)
+- **Register AI tools** to extend what the AI can do
+- **Intercept messages** to modify or enhance interactions
+- **Access Cognautic's AI engine** to create intelligent features
+- **Interact with the workspace** and execute commands
+
+### Quick Start
+
+```bash
+# Start Cognautic CLI
+cognautic chat
+
+# Install a plugin (automatically loads it)
+/plugin install examples/plugins/debug-assistant
+
+# Use the plugin's commands
+/debug                    # Analyze workspace for bugs
+/debugfile test.js --fix  # Analyze and fix specific file
+```
+
+### Plugin Commands
+
+| Command | Description |
+|---------|-------------|
+| `/plugin install <path>` | Install and auto-load a plugin from a directory |
+| `/plugin list` | List all installed plugins with their status |
+| `/plugin load <name>` | Load a specific plugin |
+| `/plugin unload <name>` | Unload a plugin from memory |
+| `/plugin uninstall <name>` | Completely remove a plugin |
+| `/plugin info <name>` | Show detailed information about a plugin |
+
+#### 2. Hello World
+**Location:** `examples/plugins/hello-world/`
+
+A simple example plugin demonstrating basic plugin structure and capabilities.
+
+**Commands:**
+```bash
+/hello          # Simple greeting
+/greet <name>   # Personalized greeting
+/stats          # Show plugin statistics
+```
+
+### Creating Your Own Plugin
+
+**1. Create plugin directory:**
+```bash
+mkdir my-plugin
+cd my-plugin
+```
+
+**2. Create `plugin.json`:**
+```json
+{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "My awesome plugin",
+  "author": "Your Name",
+  "entry_point": "my_plugin.Plugin",
+  "dependencies": []
+}
+```
+
+**3. Create `my_plugin.py`:**
+```python
+from cognautic.plugin_manager import BasePlugin, PluginAPI
+
+class Plugin(BasePlugin):
+    async def on_load(self):
+        # Register a custom command
+        self.api.register_command(
+            "mycommand",
+            self.my_command,
+            "Description of my command"
+        )
+        self.api.print("My plugin loaded!", style="green")
+    
+    async def my_command(self, args, context):
+        self.api.print("Hello from my plugin!")
+        
+        # Use AI
+        response = await self.api.ask_ai("What is Python?")
+        self.api.print(response)
+```
+
+**4. Install and use:**
+```bash
+/plugin install /path/to/my-plugin
+/mycommand
+```
+
+### Plugin API
+
+Plugins have access to a rich API:
+
+**Command Registration:**
+- `api.register_command(command, handler, description)` - Add custom commands
+- `api.register_tool(tool)` - Add tools for AI to use
+
+**Context Access:**
+- `api.get_workspace()` - Get current workspace path
+- `api.get_provider()` - Get current AI provider
+- `api.get_model()` - Get current AI model
+- `api.get_config_manager()` - Access configuration
+- `api.get_ai_engine()` - Access AI engine
+- `api.get_memory_manager()` - Access conversation memory
+
+**Utilities:**
+- `api.print(message, style)` - Print with Rich formatting
+- `api.execute_command(cmd)` - Run shell commands
+- `api.ask_ai(prompt)` - Send prompts to AI
+
+**Lifecycle Hooks:**
+- `on_load()` - Called when plugin loads
+- `on_unload()` - Called when plugin unloads
+- `on_message(message, role)` - Intercept messages
+
+### Documentation
+
+- **[PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)** - Complete plugin development guide
+- **[examples/plugins/README.md](examples/plugins/README.md)** - Plugin examples and tutorials
+- **[PLUGIN_SYSTEM_SUMMARY.md](PLUGIN_SYSTEM_SUMMARY.md)** - Implementation overview
+
+### Plugin Ideas
+
+- **Code formatters** - Auto-format code in different styles
+- **Test generators** - Generate unit tests for functions
+- **Documentation generators** - Create docs from code
+- **Deployment tools** - Deploy to various platforms
+- **Database tools** - Query and manage databases
+- **API clients** - Interact with external APIs
+- **Custom linters** - Project-specific code quality checks
+
+---
+
 ## Overview
 
 Cognautic CLI is a Python-based command-line interface that brings AI-powered development capabilities directly to your terminal. It provides agentic tools for file operations, command execution, web search, and code analysis with support for multiple AI providers. The tool is accessed through a single `cognautic` command with various subcommands.
@@ -213,6 +355,7 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 
 - **Multi-Provider AI Support**: Integrate with OpenAI, Anthropic, Google, Together AI, OpenRouter, and 15+ other AI providers
 - **Local Model Support**: Run free open-source Hugging Face models locally without API keys (NEW! 🎉)
+- **Plugin System**: Extend Cognautic with custom commands and tools via plugins (NEW! 🔌)
 - **MCP (Model Context Protocol) Support**: Connect to external MCP servers and expose Cognautic's capabilities (NEW! 🔌)
 - **Agentic Tools**: File operations, command execution, web search, and code analysis
 - **Intelligent Web Search**: Automatically searches the web when implementing features requiring current/external information (NEW! 🔍)
