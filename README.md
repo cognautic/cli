@@ -332,6 +332,129 @@ Plugins have access to a rich API:
 
 ---
 
+## Repository Documenter (NEW! 📚)
+
+Cognautic CLI includes a built-in **Repository Documenter** that automatically generates comprehensive documentation for any public git repository using AI.
+
+### What is Repository Documenter?
+
+The Repository Documenter analyzes a git repository's structure, code, and configuration files to create:
+- **Comprehensive Documentation** - Complete README-style documentation in Markdown
+- **Architecture Diagrams** - Python scripts using Graphviz to visualize project architecture
+- **Project Overview** - What the project does and its purpose
+- **Installation Guide** - How to install and set up the project
+- **Usage Instructions** - How to use the project
+- **Code Structure** - Explanation of directory structure and key modules
+
+### Quick Start
+
+```bash
+# Start Cognautic CLI
+cognautic chat
+
+# Generate documentation for any public repository
+/docrepo https://github.com/user/awesome-project
+```
+
+### Usage
+
+```bash
+/docrepo <git_url>
+```
+
+**Examples:**
+```bash
+# Document a GitHub repository
+/docrepo https://github.com/fastapi/fastapi
+
+# Document a GitLab repository
+/docrepo https://gitlab.com/user/project
+
+# Document using SSH URL
+/docrepo git@github.com:user/repo.git
+```
+
+### Output Files
+
+The command generates two files in your current workspace:
+
+1. **`{repo_name}_DOCS.md`** - Comprehensive documentation in Markdown format
+   - Project overview and purpose
+   - Installation instructions
+   - Usage guide
+   - Code structure explanation
+   - Architecture description
+
+2. **`extra/{repo_name}_graph.py`** - Python script to generate architecture diagram
+   - Self-contained script using Graphviz
+   - Run with: `python extra/{repo_name}_graph.py`
+   - Generates visual architecture diagram
+
+### Features
+
+- ✅ **One-Command Documentation** - Generate everything with a single command
+- ✅ **AI-Powered Analysis** - Deep understanding of code structure and purpose
+- ✅ **Smart File Selection** - Automatically identifies key files (README, package.json, requirements.txt, etc.)
+- ✅ **Multi-Language Support** - Python, JavaScript, TypeScript, Rust, Go, Java, C/C++, Ruby, PHP, and more
+- ✅ **Automatic Cleanup** - Cleans up temporary cloned repositories
+- ✅ **Token Optimized** - Intelligently limits file contents to prevent context overflow
+
+### Example Workflow
+
+```bash
+# Navigate to your workspace
+/workspace ~/projects
+
+# Generate documentation for a repository
+/docrepo https://github.com/django/django
+
+# AI analyzes the repository...
+# ✓ Cloning repository...
+# ✓ Analyzing file structure...
+# ✓ Found 1,234 files
+# ✓ Sending request to AI...
+# ✓ Documentation saved to: django_DOCS.md
+# ✓ Graph script saved to: extra/django_graph.py
+
+# View the generated documentation
+cat django_DOCS.md
+
+# Generate the architecture diagram
+cd extra
+python django_graph.py
+```
+
+### Supported File Types
+
+**Configuration Files:**
+- README.md, package.json, requirements.txt
+- pyproject.toml, setup.py, Cargo.toml
+- go.mod, pom.xml, build.gradle
+- composer.json
+
+**Source Code:**
+- Python (.py), JavaScript (.js), TypeScript (.ts, .tsx, .jsx)
+- Rust (.rs), Go (.go), Java (.java)
+- C/C++ (.c, .cpp, .h), Ruby (.rb), PHP (.php)
+- Vue (.vue), Swift (.swift), Kotlin (.kt)
+- Scala (.scala), C# (.cs)
+
+### Requirements
+
+- **Git** - Must be installed on your system
+- **Public Repository** - Repository must be publicly accessible
+- **AI Provider** - Any configured AI provider (OpenAI, Anthropic, Google, etc.)
+- **Graphviz** (optional) - To run the generated architecture diagram scripts
+
+### Tips
+
+- Use with larger, more capable models for better documentation quality
+- The generated graph script requires `graphviz` Python package: `pip install graphviz`
+- Documentation quality improves with well-structured repositories
+- Works best with repositories that have clear file organization
+
+---
+
 ## Overview
 
 Cognautic CLI is a Python-based command-line interface that brings AI-powered development capabilities directly to your terminal. It provides agentic tools for file operations, command execution, web search, and code analysis with support for multiple AI providers. The tool is accessed through a single `cognautic` command with various subcommands.
@@ -581,6 +704,13 @@ Note: You can also load sessions by numeric index from `/session list` using `/s
 /rules remove workspace <index>      # Remove a workspace rule by index
 /rules clear global                  # Clear all global rules
 /rules clear workspace               # Clear all workspace rules
+```
+
+### Repository Documentation
+
+```bash
+/docrepo <git_url>   # Generate comprehensive documentation for a git repository
+# Example: /docrepo https://github.com/user/awesome-project
 ```
 
 ---

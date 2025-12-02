@@ -112,6 +112,7 @@ from . import __version__ as __cli_version__
 from .voice_input import transcribe_once
 from .mcp_commands import handle_mcp_command
 from .utils import is_restricted_directory
+from .repo_documenter import document_repository
 
 console = Console()
 
@@ -160,6 +161,7 @@ class SlashCommandCompleter(Completer):
             '/mcp-tools': 'List tools from MCP servers',
             '/mcp-resources': 'List resources from MCP servers',
             '/plugin': 'Manage plugins (install, list, load, unload)',
+            '/docrepo': 'Generate documentation for a git repository',
         }
     
     def set_workspace(self, workspace: str):
@@ -1909,6 +1911,38 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             console.print(f"[red]ERROR: Failed to open vim: {str(e)}[/red]")
         
         return True
+    
+    elif cmd == "docrepo":
+        # Generate documentation for a git repository
+        if len(parts) < 2:
+            console.print("Usage: /docrepo <git_url>", style="yellow")
+            console.print("Example: /docrepo https://github.com/user/repo", style="dim")
+            return True
+        
+        repo_url = parts[1]
+        current_workspace = context.get('current_workspace', os.getcwd())
+        current_provider = context.get('provider', 'openai')
+        current_model = context.get('model', '')
+        
+        # Validate git URL
+        if not (repo_url.startswith('http://') or repo_url.startswith('https://') or repo_url.startswith('git@')):
+            console.print("ERROR: Invalid git URL. Must start with http://, https://, or git@", style="red")
+            return True
+        
+        # Get memory manager from context
+        memory_manager = context.get('memory_manager')
+        
+        # Call the document_repository function
+        await document_repository(
+            repo_url=repo_url,
+            workspace=current_workspace,
+            ai_engine=ai_engine,
+            provider=current_provider,
+            model=current_model,
+            memory_manager=memory_manager
+        )
+        
+        return True
 
     
     elif cmd == "mcp" or cmd.startswith("mcp-"):
@@ -2097,6 +2131,7 @@ def show_help():
     help_text.append("• /ps or /processes - List all running background processes\n")
     help_text.append("• /ct <process_id> or /cancel <process_id> - Terminate a background process\n")
     help_text.append("• /editor [filepath] - Open vim editor (Ctrl+E to exit vim)\n")
+    help_text.append("• /docrepo <git_url> - Generate documentation for a git repository\n", style="bold cyan")
     help_text.append("• /clear - Clear chat screen\n")
     help_text.append("• /plugin [install|list|load|unload|uninstall|info] - Manage plugins\n", style="bold magenta")
     help_text.append("  - /plugin install <path> - Install a plugin from a directory\n", style="dim")
