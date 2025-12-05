@@ -455,6 +455,148 @@ python django_graph.py
 
 ---
 
+## Multi-Agent Collaboration (NEW! 🤖🤝🤖)
+
+Cognautic CLI now supports **Multi-Agent Collaboration** where multiple AI models work together on your projects through a structured three-phase workflow.
+
+### What is Multi-Agent Collaboration?
+
+Multi-Agent mode enables different AI models to collaborate in real-time:
+- **Phase 1: Discussion** - Agents analyze the task and discuss approaches
+- **Phase 2: Planning** - Agents coordinate and divide the work
+- **Phase 3: Execution** - Agents work in parallel with live side-by-side view
+
+### Quick Start
+
+```bash
+# Start Cognautic CLI
+cognautic chat
+
+# Activate multi-agent mode with 2+ models
+/multiagent openai gpt-4 anthropic claude-3-sonnet google gemini-pro
+
+# Send your project request
+Build a todo app with React frontend and Node.js backend
+```
+
+### Usage
+
+```bash
+/multiagent provider1 model1 provider2 model2 [provider3 model3 ...]
+```
+
+**Examples:**
+```bash
+# Two agents
+/multiagent openai gpt-4 google gemini-pro
+
+# Three agents for complex projects
+/multiagent openai gpt-4 anthropic claude-3-sonnet google gemini-2.5-flash
+
+# Mix different providers
+/multiagent openrouter gpt-4 groq llama-3.1-70b google gemini-pro
+```
+
+### The Three-Phase Workflow
+
+#### Phase 1: Discussion 💬
+Agents take turns analyzing your request:
+- **Agent 1** analyzes the task and identifies main components
+- **Agent 2** reviews Agent 1's analysis and adds their perspective  
+- **Agent 3+** continue the discussion, pointing out missed items
+
+**Example:**
+```
+Agent 1 (GPT-4): "We need authentication, database models, and API endpoints..."
+Agent 2 (Claude): "Good analysis. I'd add input validation and rate limiting..."
+Agent 3 (Gemini): "Building on previous points, let's use PostgreSQL and Docker..."
+```
+
+#### Phase 2: Planning 📋
+Agents coordinate to divide the work:
+- **Coordinator** (Agent 1) creates task assignments
+- Other agents review and suggest modifications
+- Tasks are assigned with priorities and file responsibilities
+
+**Example Plan:**
+```
+Agent 1: Set up project structure (Priority: 1)
+Agent 2: Implement authentication system (Priority: 1)
+Agent 3: Create API endpoints and documentation (Priority: 2)
+```
+
+#### Phase 3: Real-Time Execution ⚡
+Agents work in parallel with **side-by-side split-screen view**:
+
+```
+┌─────────────────────┬─────────────────────┬─────────────────────┐
+│ Agent 1 (GPT-4)     │ Agent 2 (Claude)    │ Agent 3 (Gemini)    │
+├─────────────────────┼─────────────────────┼─────────────────────┤
+│ Creating package.   │ Setting up Express  │ Creating Docker     │
+│ json...             │ server...           │ files...            │
+│ ✓ Created React app │ ✓ Created routes    │ ✓ Created Dockerfile│
+│ Creating components │ Creating models     │ Creating tests      │
+│ ...                 │ ...                 │ ...                 │
+└─────────────────────┴─────────────────────┴─────────────────────┘
+```
+
+### Features
+
+- ✅ **Diverse Perspectives** - Different models bring different strengths
+- ✅ **Quality Assurance** - Agents review each other's plans
+- ✅ **Parallel Execution** - Faster than sequential single-agent work
+- ✅ **Shared Workspace** - All agents work in same folder for easy integration
+- ✅ **Live Streaming** - See exactly what each agent is doing in real-time
+- ✅ **Auto YOLO Mode** - Automatically enabled for smooth collaboration
+
+### Best Practices
+
+1. **Choose Diverse Models**: Use different models for varied perspectives
+   - GPT-4 for complex reasoning
+   - Claude for detailed analysis
+   - Gemini for creative solutions
+
+2. **Optimal Agent Count**:
+   - 2 agents: Good for simple tasks
+   - 3 agents: Ideal for most projects
+   - 4+ agents: For complex, multi-faceted projects
+
+3. **Clear Requests**: Be specific about what you want built
+
+4. **Review Integration**: Agents work in parallel, so review how their work fits together
+
+### Example Workflow
+
+```bash
+# Set up workspace
+/workspace ~/projects/my-app
+
+# Activate multi-agent mode
+/multiagent openai gpt-4 anthropic claude-3-sonnet google gemini-pro
+
+# Send request
+Create a modern web application with:
+- React frontend with TypeScript
+- Express.js backend
+- PostgreSQL database
+- User authentication
+- RESTful API
+- Docker deployment
+
+# Watch the agents collaborate!
+# ✓ Discussion phase complete
+# ✓ Planning phase complete  
+# ✓ Execution phase complete (side-by-side view)
+# 🎉 Project ready in your workspace!
+```
+
+### Documentation
+
+- **[MULTIAGENT.md](MULTIAGENT.md)** - Comprehensive user guide
+- **[MULTIAGENT_IMPLEMENTATION.md](MULTIAGENT_IMPLEMENTATION.md)** - Technical documentation
+
+---
+
 ## Overview
 
 Cognautic CLI is a Python-based command-line interface that brings AI-powered development capabilities directly to your terminal. It provides agentic tools for file operations, command execution, web search, and code analysis with support for multiple AI providers. The tool is accessed through a single `cognautic` command with various subcommands.
@@ -476,10 +618,11 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 
 ## Features
 
+- **Multi-Agent Collaboration**: Enable multiple AI models to collaborate on projects through discussion, planning, and parallel execution (NEW! 🤖🤝🤖)
 - **Multi-Provider AI Support**: Integrate with OpenAI, Anthropic, Google, Together AI, OpenRouter, and 15+ other AI providers
-- **Local Model Support**: Run free open-source Hugging Face models locally without API keys (NEW! 🎉)
-- **Plugin System**: Extend Cognautic with custom commands and tools via plugins (NEW! 🔌)
-- **MCP (Model Context Protocol) Support**: Connect to external MCP servers and expose Cognautic's capabilities (NEW! 🔌)
+- **Local Model Support**: Run free open-source Hugging Face models locally without API keys
+- **Plugin System**: Extend Cognautic with custom commands and tools via plugins
+- **MCP (Model Context Protocol) Support**: Connect to external MCP servers and expose Cognautic's capabilities
 - **Agentic Tools**: File operations, command execution, web search, and code analysis
 - **Intelligent Web Search**: Automatically searches the web when implementing features requiring current/external information (NEW! 🔍)
 - **Rules Management**: Define global and workspace rules to guide AI behavior
@@ -692,6 +835,15 @@ Note: You can also load sessions by numeric index from `/session list` using `/s
 ```bash
 /mml <prov1> <model1> [prov2] <model2> ...   # Run models side-by-side with live streaming
 # Example: /mml google gemini-2.5-flash openrouter gpt-4
+/qmml                                        # Quit multi-model mode
+```
+
+### Multi-Agent Collaboration
+
+```bash
+/multiagent <prov1> <model1> <prov2> <model2> ...   # Enable multi-agent collaboration mode
+# Example: /multiagent openai gpt-4 anthropic claude-3-sonnet google gemini-pro
+# Agents will discuss, plan, and work together on your project
 ```
 
 ### Rules Management

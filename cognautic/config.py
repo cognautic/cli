@@ -218,43 +218,110 @@ class ConfigManager:
         return endpoints.get(provider)
     
     def interactive_setup(self):
-        """Interactive setup wizard"""
+        """Interactive setup wizard with improved UX"""
         console.print("🔧 Cognautic CLI Interactive Setup", style="bold blue")
         console.print("This wizard will help you configure API keys for AI providers.\n")
         
         providers = [
-            ("openai", "OpenAI", "OPENAI_API_KEY"),
-            ("anthropic", "Anthropic", "ANTHROPIC_API_KEY"),
-            ("google", "Google", "GOOGLE_API_KEY"),
-            ("together", "Together AI", "TOGETHER_API_KEY"),
-            ("openrouter", "OpenRouter", "OPENROUTER_API_KEY")
+            ("openai", "OpenAI", "OPENAI_API_KEY", "https://platform.openai.com/api-keys"),
+            ("anthropic", "Anthropic", "ANTHROPIC_API_KEY", "https://console.anthropic.com/settings/keys"),
+            ("google", "Google Gemini", "GOOGLE_API_KEY", "https://aistudio.google.com/app/apikey"),
+            ("together", "Together AI", "TOGETHER_API_KEY", "https://api.together.xyz/settings/api-keys"),
+            ("openrouter", "OpenRouter", "OPENROUTER_API_KEY", "https://openrouter.ai/keys"),
+            ("groq", "Groq", "GROQ_API_KEY", "https://console.groq.com/keys"),
+            ("mistral", "Mistral AI", "MISTRAL_API_KEY", "https://console.mistral.ai/api-keys"),
+            ("deepseek", "DeepSeek", "DEEPSEEK_API_KEY", "https://platform.deepseek.com/api_keys"),
         ]
         
-        for provider_id, provider_name, env_var in providers:
-            if Confirm.ask(f"Configure {provider_name}?"):
-                console.print(f"Get your API key from the {provider_name} dashboard")
-                console.print(f"Environment variable: {env_var}")
+        while True:
+            console.print("\n[bold cyan]Available Providers:[/bold cyan]")
+            for i, (provider_id, provider_name, _, _) in enumerate(providers, 1):
+                # Check if already configured
+                is_configured = self.has_api_key(provider_id)
+                status = "[green]✓ Configured[/green]" if is_configured else "[dim]Not configured[/dim]"
+                console.print(f"  {i}. {provider_name:20} {status}")
+            
+            console.print(f"\n  {len(providers) + 1}. [yellow]Set default provider[/yellow]")
+            console.print(f"  {len(providers) + 2}. [green]Finish setup[/green]")
+            
+            choice = Prompt.ask(
+                "\n[bold]Select a provider to configure (or option)[/bold]",
+                default=str(len(providers) + 2)
+            )
+            
+            try:
+                choice_num = int(choice)
+            except ValueError:
+                console.print("[red]Invalid choice. Please enter a number.[/red]")
+                continue
+            
+            # Finish setup
+            if choice_num == len(providers) + 2:
+                break
+            
+            # Set default provider
+            elif choice_num == len(providers) + 1:
+                configured_providers = self.list_providers()
+                if not configured_providers:
+                    console.print("[yellow]No providers configured yet. Please configure at least one provider first.[/yellow]")
+                    continue
                 
-                api_key = Prompt.ask(f"Enter {provider_name} API key", password=True)
-                if api_key:
-                    self.set_api_key(provider_id, api_key)
-                    console.print(f"✅ {provider_name} API key saved", style="green")
+                console.print("\n[bold cyan]Configured Providers:[/bold cyan]")
+                for i, prov in enumerate(configured_providers, 1):
+                    console.print(f"  {i}. {prov}")
+                
+                default_choice = Prompt.ask(
+                    "\n[bold]Select default provider number[/bold]",
+                    default="1"
+                )
+                
+                try:
+                    default_idx = int(default_choice) - 1
+                    if 0 <= default_idx < len(configured_providers):
+                        default_provider = configured_providers[default_idx]
+                        self.set_config("default_provider", default_provider)
+                        console.print(f"[green]✅ Default provider set to {default_provider}[/green]")
+                    else:
+                        console.print("[red]Invalid selection.[/red]")
+                except ValueError:
+                    console.print("[red]Invalid input.[/red]")
+            
+            # Configure a provider
+            elif 1 <= choice_num <= len(providers):
+                provider_id, provider_name, env_var, docs_url = providers[choice_num - 1]
+                
+                console.print(f"\n[bold cyan]Configuring {provider_name}[/bold cyan]")
+                console.print(f"[dim]Get your API key from: {docs_url}[/dim]")
+                console.print(f"[dim]Environment variable: {env_var}[/dim]\n")
+                
+                # Check if already configured
+                if self.has_api_key(provider_id):
+                    if not Confirm.ask(f"{provider_name} is already configured. Reconfigure?", default=False):
+                        continue
+                
+                api_key = Prompt.ask(f"Enter {provider_name} API key (or press Enter to skip)", password=True)
+                
+                if api_key and api_key.strip():
+                    self.set_api_key(provider_id, api_key.strip())
+                    console.print(f"[green]✅ {provider_name} API key saved[/green]")
                 else:
-                    console.print(f"⏭️ Skipping {provider_name}", style="yellow")
-                
-                console.print()
+                    console.print(f"[yellow]⏭️  Skipped {provider_name}[/yellow]")
+            
+            else:
+                console.print("[red]Invalid choice. Please select a valid number.[/red]")
         
-        # Configure default provider
+        # Final summary
         configured_providers = self.list_providers()
         if configured_providers:
-            console.print("Available providers:", ", ".join(configured_providers))
-            default_provider = Prompt.ask(
-                "Choose default provider", 
-                choices=configured_providers,
-                default=configured_providers[0]
-            )
-            self.set_config("default_provider", default_provider)
-            console.print(f"✅ Default provider set to {default_provider}", style="green")
-        
-        console.print("\n🎉 Setup complete! You can now use Cognautic CLI.", style="bold green")
-        console.print("Try: cognautic chat --help")
+            console.print("\n[bold green]🎉 Setup complete![/bold green]")
+            console.print(f"[green]Configured providers: {', '.join(configured_providers)}[/green]")
+            
+            default_provider = self.get_config_value("default_provider")
+            if default_provider:
+                console.print(f"[green]Default provider: {default_provider}[/green]")
+            
+            console.print("\n[bold]Next steps:[/bold]")
+            console.print("  • Start chatting: [cyan]cognautic chat[/cyan]")
+            console.print("  • Get help: [cyan]cognautic --help[/cyan]")
+        else:
+            console.print("\n[yellow]No providers configured. Run /setup again when you're ready.[/yellow]")

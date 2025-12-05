@@ -113,6 +113,7 @@ from .voice_input import transcribe_once
 from .mcp_commands import handle_mcp_command
 from .utils import is_restricted_directory
 from .repo_documenter import document_repository
+from .multi_agent import MultiAgentOrchestrator, AgentConfig
 
 console = Console()
 
@@ -146,6 +147,7 @@ class SlashCommandCompleter(Completer):
             '/editor': 'Open vim editor for file editing',
             '/mml': 'Enable multi-model mode with specified providers/models',
             '/qmml': 'Quit multi-model mode',
+            '/multiagent': 'Multi-agent collaboration mode (agents discuss, plan, then work together)',
             '/index': 'Show codebase index status',
             '/ps': 'List all running background processes',
             '/processes': 'List all running background processes',
@@ -417,6 +419,11 @@ def chat(provider, model, project_path, websocket_port, session):
             multi_model_folders = {}  # Map of model names to folder paths
             original_workspace = current_workspace  # Store original workspace for restoration
             
+            # Multi-agent collaboration mode state
+            multiagent_mode = False
+            multiagent_configs = []  # List of AgentConfig objects
+            multiagent_orchestrator = None  # MultiAgentOrchestrator instance
+            
             session_created = False  # Track if session has been created
             
             # Check if indexing is needed (but don't block on it)
@@ -669,6 +676,9 @@ def chat(provider, model, project_path, websocket_port, session):
                             'multi_model_mode': multi_model_mode,
                             'multi_model_configs': multi_model_configs,
                             'multi_model_folders': multi_model_folders,
+                            'multiagent_mode': multiagent_mode,
+                            'multiagent_configs': multiagent_configs,
+                            'multiagent_orchestrator': multiagent_orchestrator,
                             'original_workspace': original_workspace,
                             'mcp_manager': mcp_manager,
                             'mcp_config': mcp_config,
@@ -685,6 +695,9 @@ def chat(provider, model, project_path, websocket_port, session):
                             multi_model_mode = context.get('multi_model_mode', multi_model_mode)
                             multi_model_configs = context.get('multi_model_configs', multi_model_configs)
                             multi_model_folders = context.get('multi_model_folders', multi_model_folders)
+                            multiagent_mode = context.get('multiagent_mode', multiagent_mode)
+                            multiagent_configs = context.get('multiagent_configs', multiagent_configs)
+                            multiagent_orchestrator = context.get('multiagent_orchestrator', multiagent_orchestrator)
                             
                             if old_workspace != current_workspace:
                                 if memory_manager.get_current_session():
@@ -730,8 +743,39 @@ def chat(provider, model, project_path, websocket_port, session):
                             index_thread.start()
                             indexing_in_background = False
                     
+                    # Check if multiagent mode is active
+                    multiagent_mode = context.get('multiagent_mode', False) if 'context' in locals() else False
+                    multiagent_orchestrator = context.get('multiagent_orchestrator') if 'context' in locals() else None
+                    
                     # Process user input with AI (including conversation history)
-                    if multi_model_mode:
+                    if multiagent_mode and multiagent_orchestrator:
+                        # Multi-agent collaboration mode
+                        console.print("\n[bold cyan]🤖 Starting Multi-Agent Collaboration[/bold cyan]\n")
+                        
+                        try:
+                            # Run the collaboration workflow
+                            await multiagent_orchestrator.run_collaboration(user_input)
+                            
+                            # Disable multiagent mode after completion
+                            if 'context' in locals():
+                                context['multiagent_mode'] = False
+                                context['multiagent_orchestrator'] = None
+                            
+                            # Skip normal processing
+                            continue
+                            
+                        except Exception as e:
+                            console.print(f"[red]Error during multi-agent collaboration: {e}[/red]")
+                            import traceback
+                            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+                            
+                            # Disable multiagent mode on error
+                            if 'context' in locals():
+                                context['multiagent_mode'] = False
+                                context['multiagent_orchestrator'] = None
+                            continue
+                    
+                    elif multi_model_mode:
                         # Multi-model mode: process with all configured models
                         console.print(f"[dim]Processing with {len(multi_model_configs)} models in parallel...[/dim]")
                         
@@ -1840,6 +1884,99 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
         console.print("INFO: Returned to single model mode", style="dim")
         return True
     
+    elif cmd == "multiagent":
+        # Multi-agent collaboration mode
+        if len(parts) < 3 or len(parts) % 2 != 1:
+            console.print("ERROR: Usage: /multiagent provider1 model1 provider2 model2 [provider3 model3 ...]", style="red")
+            console.print("Example: /multiagent openai gpt-4 anthropic claude-3-sonnet-20240229 google gemini-pro", style="dim")
+            console.print("\nThis mode enables multiple AI models to:", style="yellow")
+            console.print("  1. Discuss the task and identify issues", style="dim")
+            console.print("  2. Plan and split up the work", style="dim")
+            console.print("  3. Work together in real-time", style="dim")
+            return True
+        
+        # Reinitialize providers to pick up any newly configured ones
+        try:
+            ai_engine._initialize_providers()
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not reinitialize providers: {e}[/yellow]")
+        
+        # Parse provider-model pairs
+        agent_configs = []
+        for i in range(1, len(parts), 2):
+            if i + 1 < len(parts):
+                provider_name = parts[i]
+                model_name = parts[i + 1]
+                
+                # Validate provider is available in AI engine
+                if provider_name not in ai_engine.providers:
+                    # Check if it's configured but not initialized
+                    config_manager = context.get('config_manager')
+                    if config_manager.has_api_key(provider_name):
+                        console.print(f"ERROR: Provider {provider_name} is configured but failed to initialize.", style="red")
+                        console.print(f"Available providers: {', '.join(ai_engine.providers.keys())}", style="yellow")
+                    else:
+                        # Check if it's a no-auth provider like ollama
+                        from .provider_endpoints import get_provider_config
+                        provider_config = get_provider_config(provider_name)
+                        if not provider_config or not provider_config.get('no_auth', False):
+                            console.print(f"ERROR: Provider {provider_name} not configured.", style="red")
+                            console.print(f"Available providers: {', '.join(ai_engine.providers.keys())}", style="yellow")
+                            console.print(f"Use /setup to configure {provider_name}", style="dim")
+                    return True
+                
+                # Create agent config
+                agent_num = len(agent_configs) + 1
+                agent_name = f"Agent {agent_num}"
+                
+                # All agents work in the same workspace folder
+                current_workspace = context.get('current_workspace', os.getcwd())
+                agent_folder = Path(current_workspace)
+                
+                agent_config = AgentConfig(
+                    provider=provider_name,
+                    model=model_name,
+                    name=agent_name,
+                    folder=agent_folder
+                )
+                agent_configs.append(agent_config)
+        
+        if len(agent_configs) < 2:
+            console.print("ERROR: Multi-agent mode requires at least 2 agents", style="red")
+            return True
+        
+        # Display agent configuration
+        console.print(f"\n[bold cyan]Multi-Agent Collaboration Setup[/bold cyan]")
+        console.print(f"[dim]Configured {len(agent_configs)} agents:[/dim]\n")
+        for agent in agent_configs:
+            console.print(f"  • {agent.name}: {agent.provider}:{agent.model}")
+        
+        console.print(f"\n[dim]Shared workspace: {agent_configs[0].folder}[/dim]")
+        console.print("\n[yellow]Ready to start collaboration![/yellow]")
+        console.print("[dim]The agents will first discuss the task, then plan, then execute.[/dim]")
+        console.print("[dim]All agents will work together in the same workspace.[/dim]\n")
+        
+        # Store in context for the next user message
+        context['multiagent_mode'] = True
+        context['multiagent_configs'] = agent_configs
+        context['multiagent_orchestrator'] = MultiAgentOrchestrator(
+            agents=agent_configs,
+            workspace=context.get('current_workspace', os.getcwd()),
+            ai_engine=ai_engine,
+            memory_manager=context.get('memory_manager')
+        )
+        
+        # Automatically enable YOLO mode
+        confirmation_manager = context.get('confirmation_manager')
+        if confirmation_manager and not confirmation_manager.yolo_mode:
+            confirmation_manager.toggle_yolo_mode()
+            console.print("INFO: Automatically enabled YOLO mode for multi-agent operation\n", style="yellow")
+        
+        console.print("[bold green]Multi-agent mode activated![/bold green]")
+        console.print("[dim]Now send your project request and the agents will collaborate on it.[/dim]\n")
+        
+        return True
+    
     elif cmd == "yolo":
         confirmation_manager = context.get('confirmation_manager')
         if confirmation_manager:
@@ -2125,6 +2262,9 @@ def show_help():
     help_text.append("• /mml <provider1> <model1> <provider2> <model2> ... - Enable multi-model mode\n", style="bold green")
     help_text.append("  Example: /mml openai gpt-4 anthropic claude-3-sonnet google gemini-pro\n", style="dim")
     help_text.append("• /qmml - Quit multi-model mode and return to single model\n", style="bold green")
+    help_text.append("• /multiagent <provider1> <model1> <provider2> <model2> ... - Multi-agent collaboration mode\n", style="bold magenta")
+    help_text.append("  Agents will discuss, plan, and work together on your project\n", style="dim")
+    help_text.append("  Example: /multiagent openai gpt-4 anthropic claude-3-sonnet google gemini-pro\n", style="dim")
     help_text.append("• /index - Show codebase index status\n")
     help_text.append("  - /index rebuild - Rebuild codebase index from scratch\n", style="dim")
     help_text.append("  - /index stats - Show detailed index statistics\n", style="dim")
