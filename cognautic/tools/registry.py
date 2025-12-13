@@ -52,6 +52,7 @@ class ToolRegistry:
         from .directory_context import DirectoryContextTool
         from .code_navigation import CodeNavigationTool
         from .codebase_search import CodebaseSearchTool
+        from .ask_question import AskQuestionTool
         
         # Register tools
         self.register_tool(FileOperationsTool())
@@ -63,6 +64,7 @@ class ToolRegistry:
         self.register_tool(DirectoryContextTool())
         self.register_tool(CodeNavigationTool())
         self.register_tool(CodebaseSearchTool())
+        self.register_tool(AskQuestionTool())
     
     def register_tool(self, tool: BaseTool):
         """Register a tool"""

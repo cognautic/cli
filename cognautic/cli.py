@@ -143,6 +143,7 @@ class SlashCommandCompleter(Completer):
             '/session': 'Manage chat sessions',
             '/speed': 'Set typing speed',
             '/yolo': 'Toggle YOLO mode (skip confirmations)',
+            '/askq': 'Toggle ask question mode (AI can ask clarifying questions)',
             '/voice': 'Capture voice and prefill prompt',
             '/editor': 'Open vim editor for file editing',
             '/mml': 'Enable multi-model mode with specified providers/models',
@@ -1986,6 +1987,45 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             console.print("ERROR: Confirmation manager not available", style="red")
         return True
     
+    elif cmd == "askq":
+        # Toggle ask question mode
+        ai_engine = context.get('ai_engine')
+        if not ai_engine:
+            console.print("ERROR: AI engine not available", style="red")
+            return True
+        
+        # Get the ask_question tool
+        ask_tool = ai_engine.tool_registry.get_tool('ask_question')
+        if not ask_tool:
+            console.print("ERROR: Ask question tool not available", style="red")
+            return True
+        
+        # Parse on/off argument
+        if len(parts) >= 2:
+            mode = parts[1].lower()
+            if mode == "on":
+                ask_tool.enable()
+                console.print("SUCCESS: Ask question mode enabled", style="green")
+                console.print("INFO: AI can now ask clarifying questions when confused", style="dim")
+            elif mode == "off":
+                ask_tool.disable()
+                console.print("SUCCESS: Ask question mode disabled", style="green")
+                console.print("INFO: AI will not ask questions anymore", style="dim")
+            else:
+                console.print("ERROR: Usage: /askq on|off", style="red")
+        else:
+            # Toggle if no argument provided
+            if ask_tool.is_enabled():
+                ask_tool.disable()
+                console.print("SUCCESS: Ask question mode disabled", style="green")
+                console.print("INFO: AI will not ask questions anymore", style="dim")
+            else:
+                ask_tool.enable()
+                console.print("SUCCESS: Ask question mode enabled", style="green")
+                console.print("INFO: AI can now ask clarifying questions when confused", style="dim")
+        
+        return True
+    
     elif cmd == "editor":
         # Open vim editor
         import shutil
@@ -2259,6 +2299,7 @@ def show_help():
     help_text.append("  - /rules clear global|workspace - Clear all rules of a type\n", style="dim")
     help_text.append("• /speed [instant|fast|normal|slow|<number>] - Set typing speed for AI responses\n")
     help_text.append("• /yolo - Toggle YOLO mode (skip confirmations for AI operations)\n", style="bold yellow")
+    help_text.append("• /askq [on|off] - Toggle ask question mode (AI can ask clarifying questions)\n", style="bold yellow")
     help_text.append("• /mml <provider1> <model1> <provider2> <model2> ... - Enable multi-model mode\n", style="bold green")
     help_text.append("  Example: /mml openai gpt-4 anthropic claude-3-sonnet google gemini-pro\n", style="dim")
     help_text.append("• /qmml - Quit multi-model mode and return to single model\n", style="bold green")

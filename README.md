@@ -619,12 +619,13 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 ## Features
 
 - **Multi-Agent Collaboration**: Enable multiple AI models to collaborate on projects through discussion, planning, and parallel execution (NEW! 🤖🤝🤖)
-- **Multi-Provider AI Support**: Integrate with OpenAI, Anthropic, Google, Together AI, OpenRouter, and 15+ other AI providers
+- **Ask Question Mode**: AI proactively asks clarifying questions when confused or uncertain (NEW! 🤔)
+- **Multi-Provider AI Support**: Integrate with OpenAI, Anthropic, Google, Together AI, OpenRouter, and more AI providers
 - **Local Model Support**: Run free open-source Hugging Face models locally without API keys
 - **Plugin System**: Extend Cognautic with custom commands and tools via plugins
 - **MCP (Model Context Protocol) Support**: Connect to external MCP servers and expose Cognautic's capabilities
 - **Agentic Tools**: File operations, command execution, web search, and code analysis
-- **Intelligent Web Search**: Automatically searches the web when implementing features requiring current/external information (NEW! 🔍)
+- **Intelligent Web Search**: Automatically searches the web when implementing features requiring current/external information
 - **Rules Management**: Define global and workspace rules to guide AI behavior
 - **Real-time Communication**: WebSocket server for live AI responses and tool execution
 - **Secure Configuration**: Encrypted API key storage and permission management
@@ -822,6 +823,49 @@ Note: You can also load sessions by numeric index from `/session list` using `/s
 ```bash
 /yolo                 # Toggle between Safe (confirm) and YOLO (no confirm) modes
 ```
+
+### Ask Question Mode
+
+```bash
+/askq [on|off]        # Toggle ask question mode (AI can ask clarifying questions)
+```
+
+**What is Ask Question Mode?**
+
+When enabled, the AI will proactively ask clarifying questions when it encounters:
+- Framework/technology not specified (e.g., "build an app" → asks which framework)
+- Database/storage not specified (e.g., "store data" → asks which database)
+- Programming language ambiguous (e.g., "create API" → asks which language)
+- Multiple valid approaches (e.g., "add auth" → asks which method)
+- Styling/UI framework not clear (e.g., "make it look good" → asks which approach)
+
+**Example:**
+```bash
+You: build a todo app
+
+AI: 
+╭────────────────────────────────────────╮
+│  🤔 AI has a question:                 │
+│  Which framework would you prefer?     │
+╰────────────────────────────────────────╯
+
+  1. React with Vite
+  2. Vue.js
+  3. Python Flask
+  4. Something else
+
+Your choice: 1
+
+AI: Great! I'll build a todo app using React with Vite...
+```
+
+**Features:**
+- ✅ AI provides 2-3 specific options
+- ✅ Automatic "Something else" option for custom answers
+- ✅ Answer automatically sent to AI (no manual re-prompting)
+- ✅ Beautiful terminal UI with Rich panels
+- ✅ Seamless conversation flow
+
 
 ### Background Processes
 

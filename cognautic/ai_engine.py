@@ -1331,6 +1331,8 @@ class AIEngine:
         self, tool_call: dict, project_path: str, tool_results: list, confirmation_manager = None
     ):
         """Execute a single tool call and yield the result immediately"""
+        import json
+        
         try:
             tool_name = tool_call.get("tool_code")
             args = tool_call.get("args", {})
@@ -1342,6 +1344,44 @@ class AIEngine:
                     box = self._format_tool_box("Response Completed", [])
                     yield box
                     tool_results.append({"type": "control", "message": "end_response"})
+                return
+            
+            # Check for ask_question tool - special handling
+            if tool_name == "ask_question":
+                # Execute the ask_question tool
+                result = await self.tool_registry.execute_tool(
+                    "ask_question", user_id="ai_engine", **args
+                )
+                
+                if result.success:
+                    # Extract the answer
+                    answer = result.data.get("answer", "") if isinstance(result.data, dict) else ""
+                    
+                    # Display the tool result
+                    content = [
+                        f"Tool: {tool_name}",
+                        "",
+                        "Result:",
+                        json.dumps(result.data, indent=2) if isinstance(result.data, dict) else str(result.data)
+                    ]
+                    box = self._format_tool_box(f"TOOL: {tool_name}", content)
+                    yield box
+                    
+                    # Add to tool results with special marker for continuation
+                    tool_results.append({
+                        "type": "ask_question",
+                        "tool": "ask_question",
+                        "data": result.data,
+                        "answer": answer,
+                        "success": True
+                    })
+                else:
+                    content = [str(result.error)]
+                    box = self._format_tool_box(f"ERROR: {tool_name}", content)
+                    yield box
+                    tool_results.append(
+                        {"type": "error", "error": result.error, "success": False}
+                    )
                 return
 
             # Execute the tool (reuse existing tool execution logic)
@@ -2896,6 +2936,11 @@ Available tools:
         prompt += "- directory_context: Get detailed directory structure and project information\n"
         prompt += "- code_navigation: Jump to definition, find references, search symbols in code\n"
         
+        # Add ask_question tool if enabled
+        ask_tool = self.tool_registry.get_tool('ask_question')
+        if ask_tool and ask_tool.is_enabled():
+            prompt += "- ask_question: Ask user clarifying questions when confused or uncertain\n"
+        
         # Add MCP tools dynamically
         mcp_tools = [tool_name for tool_name in self.tool_registry.list_tools() if tool_name.startswith('mcp_')]
         if mcp_tools:
@@ -2908,6 +2953,115 @@ Available tools:
                     server_name = parts[1] if len(parts) > 1 else 'unknown'
                     description = tool_info.get('description', '')
                     prompt += f"- {tool_name}: [{server_name}] {description}\n"
+        
+        # Add ask_question usage instructions if enabled
+        if ask_tool and ask_tool.is_enabled():
+            prompt += """
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    ASK QUESTION FEATURE (ENABLED)                             ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+CRITICAL: When you use ask_question tool, you MUST use the user's answer in your response!
+- The tool returns {"answer": "user's choice", "was_custom": true/false}
+- ALWAYS read and use the "answer" field from the tool result
+- If was_custom is true, the user provided their own answer - USE IT EXACTLY
+- DO NOT ignore the answer and proceed with your own assumptions
+
+MANDATORY SCENARIOS - YOU MUST ASK QUESTIONS IN THESE CASES:
+
+1. **Framework/Technology Not Specified:**
+   - User asks to "build an app" or "create a website" without specifying technology
+   - Example: "build a todo app" → ASK which framework (React, Vue, Python Flask, etc.)
+   - Example: "create a web interface" → ASK which stack to use
+
+2. **Database/Storage Not Specified:**
+   - User asks for data persistence without specifying database
+   - Example: "store user data" → ASK which database (SQLite, PostgreSQL, MongoDB, etc.)
+
+3. **Programming Language Ambiguous:**
+   - User asks to "build an API" without language
+   - Example: "create a REST API" → ASK which language (Python, Node.js, Go, etc.)
+
+4. **Multiple Valid Approaches:**
+   - User request can be implemented in fundamentally different ways
+   - Example: "add authentication" → ASK which method (JWT, OAuth, sessions, etc.)
+
+5. **Styling/UI Framework Not Clear:**
+   - User asks for UI without specifying styling approach
+   - Example: "make it look good" → ASK which approach (Tailwind, Bootstrap, custom CSS, etc.)
+
+HOW TO USE THE TOOL:
+
+- ALWAYS provide at least 2 specific options (option1 and option2)
+- Optionally provide a 3rd option (option3) if there are 3+ common choices
+- A "Something else" option is AUTOMATICALLY added for custom user input
+- DO NOT include "Something else" in your options - it's added automatically
+
+Example with 2 options (3rd will be auto-added as "Something else"):
+
+```json
+{
+  "tool_code": "ask_question",
+  "args": {
+    "question": "You didn't specify which framework to use. Which would you prefer?",
+    "option1": "React with Vite (modern, popular)",
+    "option2": "Python Flask (backend framework)"
+  }
+}
+```
+
+Example with 3 options (4th will be auto-added as "Something else"):
+
+```json
+{
+  "tool_code": "ask_question",
+  "args": {
+    "question": "Which framework would you like to use for your todo list app?",
+    "option1": "React with Vite (frontend, JavaScript)",
+    "option2": "Python Flask (backend, Python)",
+    "option3": "Vue.js (frontend, JavaScript)"
+  }
+}
+```
+
+CRITICAL - USING THE ANSWER:
+
+After calling ask_question, you will receive a response like:
+{
+  "question": "Which framework...",
+  "answer": "Python Flask (backend, Python)",
+  "was_custom": false
+}
+
+OR if user chose "Something else":
+{
+  "question": "Which framework...",
+  "answer": "I want to use Django with PostgreSQL",
+  "was_custom": true
+}
+
+YOU MUST:
+1. Read the "answer" field
+2. Use that EXACT answer in your implementation
+3. If was_custom is true, parse the custom answer carefully
+4. DO NOT proceed with a different choice than what user selected
+
+WHEN TO ASK (Be Proactive):
+  ✓ User doesn't specify framework/language/technology
+  ✓ Critical technical decisions need user input
+  ✓ Multiple equally valid approaches exist
+  ✓ User's request is ambiguous or unclear
+  ✓ You need clarification on requirements
+  
+WHEN NOT TO ASK:
+  ✗ User already specified their preference clearly
+  ✗ Minor implementation details you can decide
+  ✗ Questions you can answer through web search
+  ✗ User has been very specific in their request
+
+REMEMBER: Ask questions EARLY before starting implementation, not after!
+
+"""
         
         prompt += """
 RESPONSE CONTINUATION (CRITICAL - SYSTEM WILL AUTO-CONTINUE):

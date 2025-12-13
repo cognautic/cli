@@ -11,6 +11,7 @@ from .response_control import ResponseControlTool
 from .directory_context import DirectoryContextTool
 from .code_navigation import CodeNavigationTool
 from .codebase_search import CodebaseSearchTool
+from .ask_question import AskQuestionTool
 
 __all__ = [
     'ToolRegistry',
@@ -21,5 +22,6 @@ __all__ = [
     'ResponseControlTool',
     'DirectoryContextTool',
     'CodeNavigationTool',
-    'CodebaseSearchTool'
+    'CodebaseSearchTool',
+    'AskQuestionTool'
 ]

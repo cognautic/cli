@@ -106,6 +106,7 @@ class AutoContinuationManager:
         
         # RULE 5: If ANY tools were executed, ALWAYS continue
         # Let the AI decide when it's done by calling end_response
+        # NOTE: ask_question is special - it continues with the user's answer injected
         self.iteration_count += 1
         return True
     
@@ -124,6 +125,18 @@ class AutoContinuationManager:
         Returns:
             Continuation prompt string
         """
+        # Special case: ask_question tool - inject user's answer
+        for result in tool_results:
+            tool_name = result.get('tool', result.get('type', ''))
+            if tool_name == 'ask_question' or 'ask_question' in str(tool_name):
+                # Extract the answer from the result
+                data = result.get('data', {})
+                if isinstance(data, dict):
+                    answer = data.get('answer', '')
+                    if answer:
+                        # Return the answer as if the user said it
+                        return f"My answer: {answer}"
+        
         # Special case: AI said it would use tools but didn't
         if not tool_results and ai_response:
             return """You said you would use a tool, but you didn't actually execute it.
