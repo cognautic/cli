@@ -156,6 +156,11 @@ class MemoryManager:
             
             return True
             
+        except json.JSONDecodeError as e:
+            console.print(f"❌ Session file is corrupted: {session_id}", style="red")
+            console.print(f"   Error: {e}", style="dim")
+            console.print(f"   Tip: You can remove this session manually: rm {session_file}", style="yellow")
+            return False
         except Exception as e:
             console.print(f"❌ Error loading session {session_id}: {e}", style="red")
             return False
@@ -244,6 +249,8 @@ class MemoryManager:
                 session_info = SessionInfo.from_dict(data['session_info'])
                 sessions.append(session_info)
                 
+            except json.JSONDecodeError:
+                console.print(f"⚠️  Skipping corrupted session: {session_file.name}", style="yellow")
             except Exception as e:
                 console.print(f"❌ Error reading session file {session_file}: {e}", style="red")
         
@@ -320,7 +327,7 @@ class MemoryManager:
         return obj
 
     def _save_session(self):
-        """Save current session to file with self-healing"""
+        """Save current session to file atomically to prevent corruption"""
         if not self.current_session or not self.session_file:
             return
         
@@ -337,8 +344,16 @@ class MemoryManager:
             # Convert binary data to base64 for JSON serialization
             data = self._serialize_data(raw_data)
             
-            with open(self.session_file, 'w', encoding='utf-8') as f:
+            # Atomic write: write to temp file then rename
+            temp_file = self.session_file.with_suffix('.tmp')
+            with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                # Ensure data is written to disk
+                os.fsync(f.fileno())
+            
+            # Atomic rename
+            temp_file.replace(self.session_file)
                 
         except Exception as e:
             console.print(f"❌ Error saving session: {e}", style="red")

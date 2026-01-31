@@ -344,7 +344,7 @@ class GoogleProvider(AIProvider):
                         except:
                             pass
 
-                    for tc in msg["tool_calls"]:
+                    for i, tc in enumerate(msg["tool_calls"]):
                         fn = tc["function"]
                         try:
                             # Arguments can be dict or JSON string
@@ -353,11 +353,16 @@ class GoogleProvider(AIProvider):
                                 try:
                                     args = json.loads(args)
                                 except:
-                                    pass
+                                    # Fallback to empty dict if JSON invalid, preventing crash
+                                    args = {}
+                            
+                            # Ensure args is a dict
+                            if not isinstance(args, dict):
+                                args = {}
                             
                             part = types.Part(
                                 function_call=types.FunctionCall(name=fn["name"], args=args),
-                                thought_signature=sig if sig else None
+                                thought_signature=sig if (sig and i == 0) else None
                             )
                             parts.append(part)
                         except Exception:
@@ -521,37 +526,30 @@ class GoogleProvider(AIProvider):
                                 sig = t.get("thought_signature")
                                 break
                     
-                    # Convert signature to bytes if it's a string (e.g. from history)
-                    if sig and isinstance(sig, str):
-                        try:
-                            import base64
-                            if len(sig) % 4 == 0 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=" for c in sig):
-                                try:
-                                    sig = base64.b64decode(sig)
-                                except:
-                                    sig = sig.encode('utf-8')
-                            else:
-                                sig = sig.encode('utf-8')
-                        except:
-                            pass
+                    # Don't try to manipulate the signature type blindly. 
+                    # The SDK usually handles the string/bytes conversion if needed.
 
-                    for tc in msg["tool_calls"]:
+                    for i, tc in enumerate(msg["tool_calls"]):
                         fn = tc["function"]
-                        try:
-                            args = fn.get("arguments", {})
-                            if isinstance(args, str):
-                                try:
-                                    args = json.loads(args)
-                                except:
-                                    pass
-                            
-                            part = types.Part(
-                                function_call=types.FunctionCall(name=fn["name"], args=args),
-                                thought_signature=sig if sig else None
-                            )
-                            parts.append(part)
-                        except Exception:
-                            continue
+                        
+                        # Arguments can be dict or JSON string
+                        args = fn.get("arguments", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except:
+                                args = {}
+                        
+                        # Ensure args is a dict
+                        if not isinstance(args, dict):
+                            args = {}
+                        
+                        # Create Part WITHOUT silent try/except to expose errors
+                        part = types.Part(
+                            function_call=types.FunctionCall(name=fn["name"], args=args),
+                            thought_signature=sig if (sig and i == 0) else None
+                        )
+                        parts.append(part)
                 else:
                     parts = self._parse_content_to_parts_new_sdk(content)
                 
@@ -573,6 +571,55 @@ class GoogleProvider(AIProvider):
                     final_contents.append(c)
             contents = final_contents
 
+            # REPAIR: Fix orphan function responses to avoid 400 Errors (Self-Healing)
+            for i, c in enumerate(contents):
+                # We only care about user turns (which hold function responses)
+                if c.role != "user":
+                    continue
+                
+                # Check for function responses in this turn
+                has_func_resp = False
+                for p in c.parts:
+                    if p.function_response:
+                        has_func_resp = True
+                        break
+                
+                if has_func_resp:
+                    is_orphan = False
+                    if i == 0:
+                        is_orphan = True
+                    else:
+                        prev = contents[i-1]
+                        if prev.role != "model":
+                            # Should not happen due to alternating roles check above, but for safety
+                            is_orphan = True
+                        else:
+                            # Check if previous model turn had a function call
+                            prev_has_call = False
+                            for pp in prev.parts:
+                                if pp.function_call:
+                                    prev_has_call = True
+                                    break
+                            if not prev_has_call:
+                                is_orphan = True
+                    
+                    if is_orphan:
+                        print(f"DEBUG: Repairing orphan function response at index {i} in history")
+                        # Convert all function_response parts to text parts to save the session
+                        new_parts = []
+                        for p in c.parts:
+                            if p.function_response:
+                                # Create replacement text
+                                resp_name = getattr(p.function_response, 'name', 'unknown')
+                                # Try to get content safely
+                                val = getattr(p.function_response, 'response', {})
+                                resp_content = str(val)
+                                warning_text = f"[System: The function call for '{resp_name}' was missing from history. Context treated as text: {resp_content[:200]}...]"
+                                new_parts.append(types.Part.from_text(text=warning_text))
+                            else:
+                                new_parts.append(p)
+                        c.parts = new_parts
+
             response_stream = await self.client.aio.models.generate_content_stream(
                 model=model,
                 contents=contents,
@@ -584,48 +631,70 @@ class GoogleProvider(AIProvider):
                 )
             )
 
+            # Keep track of signature across chunks
+            captured_signature = None
+
             async for chunk in response_stream:
-                try:
-                    if not chunk.candidates:
-                        continue
-                        
-                    parts = chunk.candidates[0].content.parts
-                    
-                    # Scan for signature in this chunk first
-                    chunk_signature = None
-                    for part in parts:
-                         if part.thought_signature:
-                             chunk_signature = part.thought_signature
-                             break
-                    
-                    for part in parts:
-                        if part.thought:
-                            # Stream back thinking process wrapped in tags
-                            yield f"<thought>\n{part.thought}\n</thought>\n"
-                        elif part.text:
-                            yield part.text
-                        elif part.function_call:
-                            # Yield tool call as a special object/dict
-                            fc = part.function_call
-                            tc = {
-                                "type": "function",
-                                "function": {
-                                    "name": fc.name,
-                                    "arguments": json.dumps(fc.args) if fc.args else "{}"
-                                }
-                            }
-                            # Capture and yield signature
-                            if chunk_signature:
-                                tc["thought_signature"] = chunk_signature
-                            elif part.thought_signature:
-                                tc["thought_signature"] = part.thought_signature
-                                
-                            yield {
-                                "tool_calls": [tc]
-                            }
-                        
-                except Exception as e:
+                if not chunk.candidates:
                     continue
+                    
+                parts = chunk.candidates[0].content.parts
+                
+                # Scan for signature in this chunk first - using getattr for safety
+                chunk_signature = None
+                for part in parts:
+                        # Try direct attribute on Part
+                        sig = getattr(part, 'thought_signature', None)
+                        if sig:
+                            chunk_signature = sig
+                            captured_signature = sig
+                            print(f"DEBUG: Captured signature from part: {str(sig)[:20]}...")
+                            break
+                        
+                        # Use dict access if part is a dict (unlikely with this SDK but possible)
+                        if isinstance(part, dict) and 'thought_signature' in part:
+                            sig = part['thought_signature']
+                            chunk_signature = sig
+                            captured_signature = sig
+                            break
+                
+                for part in parts:
+                    # Safely check part type
+                    thought = getattr(part, 'thought', None)
+                    text = getattr(part, 'text', None)
+                    fn_call = getattr(part, 'function_call', None)
+                    part_sig = getattr(part, 'thought_signature', None)
+                    
+                    if thought:
+                        # Stream back thinking process wrapped in tags
+                        yield f"<thought>\n{thought}\n</thought>\n"
+                    elif text:
+                        yield text
+                    elif fn_call:
+                        # Yield tool call as a special object/dict
+                        tc = {
+                            "type": "function",
+                            "function": {
+                                "name": fn_call.name,
+                                "arguments": json.dumps(fn_call.args) if fn_call.args else "{}"
+                            }
+                        }
+                        # Capture and yield signature
+                        if chunk_signature:
+                            tc["thought_signature"] = chunk_signature
+                        elif part_sig:
+                            tc["thought_signature"] = part_sig
+                        elif captured_signature:
+                            tc["thought_signature"] = captured_signature
+                        
+                        if "thought_signature" in tc:
+                            print(f"DEBUG: Yielding tool {fn_call.name} with signature")
+                        else:
+                            print(f"DEBUG: Yielding tool {fn_call.name} WITHOUT signature")
+                            
+                        yield {
+                            "tool_calls": [tc]
+                        }
         except Exception as e:
             raise Exception(f"Google API error: {str(e)}")
 
