@@ -22,9 +22,24 @@ class AIProvider(ABC):
 
     @abstractmethod
     async def generate_response(
-        self, messages: List[Dict], model: str = None, **kwargs
-    ) -> str:
+        self,
+        messages: List[Dict],
+        model: str = None,
+        tools: Optional[List[Dict]] = None,
+        **kwargs,
+    ) -> Any:  # Can return string or ToolCalls
         """Generate response from the AI provider"""
+        pass
+
+    @abstractmethod
+    async def generate_response_stream(
+        self,
+        messages: List[Dict],
+        model: str = None,
+        tools: Optional[List[Dict]] = None,
+        **kwargs,
+    ) -> AsyncGenerator[Any, None]:
+        """Stream response from the AI provider"""
         pass
 
     @abstractmethod
@@ -52,7 +67,13 @@ class GenericProvider(AIProvider):
                 if "candidates" in response and response["candidates"]:
                     candidate = response["candidates"][0]
                     if "content" in candidate and "parts" in candidate["content"]:
-                        return candidate["content"]["parts"][0]["text"]
+                        full_text = ""
+                        for part in candidate["content"]["parts"]:
+                            if "text" in part:
+                                full_text += part["text"]
+                            elif "thought" in part:
+                                full_text += f"<thought>\n{part['thought']}\n</thought>\n"
+                        return full_text or "No response generated"
                 return "No response generated"
 
             elif self.provider_name == "anthropic":
@@ -119,39 +140,610 @@ class OpenAIProvider(AIProvider):
             raise ImportError("OpenAI library not installed. Run: pip install openai")
 
     async def generate_response(
-        self, messages: List[Dict], model: str = "gpt-4", **kwargs
-    ) -> str:
+        self,
+        messages: List[Dict],
+        model: str = "gpt-4o",
+        tools: Optional[List[Dict]] = None,
+        **kwargs,
+    ) -> Any:
         try:
+            # Map tools to OpenAI format
+            openai_tools = None
+            if tools:
+                openai_tools = tools
+
             response = await self.client.chat.completions.create(
                 model=model,
                 messages=messages,
+                tools=openai_tools,
                 max_tokens=kwargs.get("max_tokens", 4096),
                 temperature=kwargs.get("temperature", 0.7),
             )
-            return response.choices[0].message.content
+            
+            message = response.choices[0].message
+            if message.tool_calls:
+                return {
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        } for tc in message.tool_calls
+                    ]
+                }
+            return message.content
         except Exception as e:
             raise Exception(f"OpenAI API error: {str(e)}")
 
     async def generate_response_stream(
-        self, messages: List[Dict], model: str = "gpt-4", **kwargs
+        self,
+        messages: List[Dict],
+        model: str = "gpt-4o",
+        tools: Optional[List[Dict]] = None,
+        **kwargs,
     ):
-        """Generate streaming response"""
+        """Generate streaming response with tool support"""
         try:
+            openai_tools = None
+            if tools:
+                openai_tools = tools
+
             stream = await self.client.chat.completions.create(
                 model=model,
                 messages=messages,
+                tools=openai_tools,
                 max_tokens=kwargs.get("max_tokens", 4096),
                 temperature=kwargs.get("temperature", 0.7),
                 stream=True,
             )
+            
+            # Map to accumulate tool calls by index
+            accumulated_tool_calls = {}
+            
             async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+                if not chunk.choices:
+                    continue
+                    
+                delta = chunk.choices[0].delta
+                
+                # Handle text content
+                if delta.content:
+                    yield delta.content
+                
+                # Handle tool calls
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in accumulated_tool_calls:
+                            accumulated_tool_calls[idx] = {
+                                "id": tc_delta.id,
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""}
+                            }
+                        
+                        if tc_delta.id:
+                            accumulated_tool_calls[idx]["id"] = tc_delta.id
+                            
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                accumulated_tool_calls[idx]["function"]["name"] += tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                accumulated_tool_calls[idx]["function"]["arguments"] += tc_delta.function.arguments
+            
+            # Yield accumulated tool calls at the end
+            if accumulated_tool_calls:
+                yield {"tool_calls": list(accumulated_tool_calls.values())}
+                
         except Exception as e:
             raise Exception(f"OpenAI API streaming error: {str(e)}")
 
     def get_available_models(self) -> List[str]:
         return ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo", "gpt-4o", "gpt-4o-mini"]
+
+
+class GoogleProvider(AIProvider):
+    """Google provider implementation"""
+
+    def __init__(self, api_key: str):
+        super().__init__(api_key)
+        try:
+            from google import genai
+            self.client = genai.Client(api_key=api_key)
+            self.genai = genai # Keep reference for types if needed
+        except ImportError:
+            raise ImportError(
+                "Google GenAI library not installed. Run: pip install google-genai"
+            )
+
+    async def generate_response(
+        self,
+        messages: List[Dict],
+        model: str = "gemini-1.5-pro",
+        tools: Optional[List[Dict]] = None,
+        **kwargs,
+    ) -> str:
+        try:
+            from google.genai import types
+            
+            # Convert tools to Google format
+            google_tools = None
+            if tools:
+                google_tools = [types.Tool(function_declarations=[
+                    types.FunctionDeclaration(
+                        name=t["function"]["name"],
+                        description=t["function"].get("description", ""),
+                        parameters=t["function"].get("parameters")
+                    ) for t in tools
+                ])]
+
+            # Convert messages format for Google
+            contents = []
+            system_instruction = None
+            
+            # Merge consecutive tool messages for Gemini
+            merged_messages = []
+            current_tool_parts = []
+            for msg in messages:
+                if msg.get("role") == "tool":
+                    current_tool_parts.append(types.Part(
+                        function_response=types.FunctionResponse(
+                            name=msg.get("name", "unknown"),
+                            response={"result": msg.get("content", "")},
+                            id=msg.get("tool_call_id")
+                        )
+                    ))
+                else:
+                    if current_tool_parts:
+                        merged_messages.append({"role": "user", "parts": current_tool_parts})
+                        current_tool_parts = []
+                    merged_messages.append(msg)
+            if current_tool_parts:
+                merged_messages.append({"role": "user", "parts": current_tool_parts})
+
+            for msg in merged_messages:
+                if "parts" in msg and msg.get("role") == "user" and msg["parts"] and hasattr(msg["parts"][0], "function_response"):
+                    contents.append(types.Content(role="user", parts=msg["parts"]))
+                    continue
+
+                role = msg["role"]
+                content = msg.get("content", "")
+                if role == "system":
+                    system_instruction = content
+                    continue
+                
+                role_map = {"user": "user", "assistant": "model", "model": "model"}
+                gemini_role = role_map.get(role, "user")
+                
+                if role in ["assistant", "model"] and msg.get("tool_calls"):
+                    parts = []
+                    if content:
+                        parts.extend(self._parse_content_to_parts_new_sdk(content))
+                    
+                    sig = msg.get("thought_signature")
+                    if not sig:
+                        for t in msg["tool_calls"]:
+                            if t.get("thought_signature"):
+                                sig = t.get("thought_signature")
+                                break
+                    
+                    # Convert signature to bytes if it's a string (e.g. from history)
+                    if sig and isinstance(sig, str):
+                        try:
+                            import base64
+                            # Try base64 decoding if it looks like encoded data
+                            if len(sig) % 4 == 0 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=" for c in sig):
+                                try:
+                                    sig = base64.b64decode(sig)
+                                except:
+                                    sig = sig.encode('utf-8')
+                            else:
+                                sig = sig.encode('utf-8')
+                        except:
+                            pass
+
+                    for tc in msg["tool_calls"]:
+                        fn = tc["function"]
+                        try:
+                            # Arguments can be dict or JSON string
+                            args = fn.get("arguments", {})
+                            if isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except:
+                                    pass
+                            
+                            part = types.Part(
+                                function_call=types.FunctionCall(name=fn["name"], args=args),
+                                thought_signature=sig if sig else None
+                            )
+                            parts.append(part)
+                        except Exception:
+                            continue
+                else:
+                    parts = self._parse_content_to_parts_new_sdk(content)
+                
+                # Filter out messages with no parts to satisfy Gemini API requirements
+                if parts:
+                    contents.append(types.Content(role=gemini_role, parts=parts))
+                elif not msg.get("tool_calls"):
+                    # Fallback for empty messages (except those intended to have tool calls)
+                    contents.append(types.Content(role=gemini_role, parts=[types.Part.from_text(text=" ")]))
+
+            # Final pass to ensure role alternation and no empty parts
+            final_contents = []
+            for c in contents:
+                if not c.parts:
+                    continue
+                if final_contents and final_contents[-1].role == c.role:
+                    # Merge consecutive turns of same role
+                    final_contents[-1].parts.extend(c.parts)
+                else:
+                    final_contents.append(c)
+            contents = final_contents
+
+            response = await self.client.aio.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    tools=google_tools,
+                    system_instruction=system_instruction,
+                    max_output_tokens=kwargs.get("max_tokens", 4096),
+                    temperature=kwargs.get("temperature", 0.7),
+                )
+            )
+
+            # Process response for tool calls
+            if response.candidates and response.candidates[0].content.parts:
+                parts = response.candidates[0].content.parts
+                tool_calls = []
+                text_content = ""
+                
+                for part in parts:
+                    if part.function_call:
+                        # Native function call
+                        fc = part.function_call
+                        tc = {
+                            "type": "function",
+                            "function": {
+                                "name": fc.name,
+                                "arguments": json.dumps(fc.args) if fc.args else "{}"
+                            }
+                        }
+                        # Capture signature
+                        if part.thought_signature:
+                            tc["thought_signature"] = part.thought_signature
+                        tool_calls.append(tc)
+                    elif part.thought:
+                        # Capture thinking process
+                        text_content += f"<thought>\n{part.thought}\n</thought>\n"
+                    elif part.text:
+                        text_content += part.text
+                
+                if tool_calls:
+                    res = {"content": text_content or None, "tool_calls": tool_calls}
+                    # Also attach signature to the response dict if found
+                    for part in parts:
+                        if part.thought_signature:
+                            res["thought_signature"] = part.thought_signature
+                            break
+                    return res
+                return text_content or "No response generated"
+
+            return "No response generated"
+
+        except Exception as e:
+            raise Exception(f"Google API error: {str(e)}")
+
+    async def generate_response_stream(
+        self,
+        messages: List[Dict],
+        model: str = "gemini-1.5-pro",
+        tools: Optional[List[Dict]] = None,
+        **kwargs,
+    ):
+        """Generate streaming response with tool support"""
+        try:
+            from google.genai import types
+            
+            # Convert tools to Google format
+            google_tools = None
+            if tools:
+                google_tools = [types.Tool(function_declarations=[
+                    types.FunctionDeclaration(
+                        name=t["function"]["name"],
+                        description=t["function"].get("description", ""),
+                        parameters=t["function"].get("parameters")
+                    ) for t in tools
+                ])]
+
+            # Convert messages to Google format
+            contents = []
+            system_instruction = None
+            
+            # Pre-process messages to merge consecutive tool turns
+            # Gemini requires all function responses for a turn to be in a single message
+            merged_messages = []
+            current_tool_parts = []
+            
+            for msg in messages:
+                if msg["role"] == "tool":
+                    current_tool_parts.append(types.Part(
+                        function_response=types.FunctionResponse(
+                            name=msg.get("name", "unknown"),
+                            response={"result": msg.get("content", "")},
+                            id=msg.get("tool_call_id")
+                        )
+                    ))
+                else:
+                    # If we have pending tool parts, push them first as a single user message
+                    if current_tool_parts:
+                        merged_messages.append({"role": "user", "parts": current_tool_parts})
+                        current_tool_parts = []
+                    merged_messages.append(msg)
+            
+            # Flush any remaining tool parts
+            if current_tool_parts:
+                merged_messages.append({"role": "user", "parts": current_tool_parts})
+
+            for msg in merged_messages:
+                # Handle actual Gemini message construction
+                # If it's our pre-merged tool message, use it directly
+                if "parts" in msg and msg.get("role") == "user" and msg["parts"] and hasattr(msg["parts"][0], "function_response"):
+                    contents.append(types.Content(role="user", parts=msg["parts"]))
+                    continue
+
+                role = msg["role"]
+                content = msg.get("content", "")
+                
+                if role == "system":
+                    system_instruction = content
+                    continue
+                
+                role_map = {"user": "user", "assistant": "model", "model": "model"}
+                gemini_role = role_map.get(role, "user")
+                
+                if role in ["assistant", "model"] and "tool_calls" in msg:
+                    # Model's previous tool calls
+                    parts = []
+                    
+                    # Add content (thoughts/text)
+                    if content:
+                        parts.extend(self._parse_content_to_parts_new_sdk(content))
+                        
+                    # Capture signature for ALL function calls in this turn
+                    sig = msg.get("thought_signature")
+                    if not sig:
+                        for t in msg["tool_calls"]:
+                            if t.get("thought_signature"):
+                                sig = t.get("thought_signature")
+                                break
+                    
+                    # Convert signature to bytes if it's a string (e.g. from history)
+                    if sig and isinstance(sig, str):
+                        try:
+                            import base64
+                            if len(sig) % 4 == 0 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=" for c in sig):
+                                try:
+                                    sig = base64.b64decode(sig)
+                                except:
+                                    sig = sig.encode('utf-8')
+                            else:
+                                sig = sig.encode('utf-8')
+                        except:
+                            pass
+
+                    for tc in msg["tool_calls"]:
+                        fn = tc["function"]
+                        try:
+                            args = fn.get("arguments", {})
+                            if isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except:
+                                    pass
+                            
+                            part = types.Part(
+                                function_call=types.FunctionCall(name=fn["name"], args=args),
+                                thought_signature=sig if sig else None
+                            )
+                            parts.append(part)
+                        except Exception:
+                            continue
+                else:
+                    parts = self._parse_content_to_parts_new_sdk(content)
+                
+                # Filter out messages with no parts
+                if parts:
+                    contents.append(types.Content(role=gemini_role, parts=parts))
+                elif "tool_calls" not in msg:
+                    contents.append(types.Content(role=gemini_role, parts=[types.Part.from_text(text=" ")]))
+
+            # Final validation: alternating roles and no empty turns
+            final_contents = []
+            for c in contents:
+                if not c.parts:
+                    continue
+                if final_contents and final_contents[-1].role == c.role:
+                    # Merge consecutive turns
+                    final_contents[-1].parts.extend(c.parts)
+                else:
+                    final_contents.append(c)
+            contents = final_contents
+
+            response_stream = await self.client.aio.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    tools=google_tools,
+                    system_instruction=system_instruction,
+                    max_output_tokens=kwargs.get("max_tokens", 4096),
+                    temperature=kwargs.get("temperature", 0.7),
+                )
+            )
+
+            async for chunk in response_stream:
+                try:
+                    if not chunk.candidates:
+                        continue
+                        
+                    parts = chunk.candidates[0].content.parts
+                    
+                    # Scan for signature in this chunk first
+                    chunk_signature = None
+                    for part in parts:
+                         if part.thought_signature:
+                             chunk_signature = part.thought_signature
+                             break
+                    
+                    for part in parts:
+                        if part.thought:
+                            # Stream back thinking process wrapped in tags
+                            yield f"<thought>\n{part.thought}\n</thought>\n"
+                        elif part.text:
+                            yield part.text
+                        elif part.function_call:
+                            # Yield tool call as a special object/dict
+                            fc = part.function_call
+                            tc = {
+                                "type": "function",
+                                "function": {
+                                    "name": fc.name,
+                                    "arguments": json.dumps(fc.args) if fc.args else "{}"
+                                }
+                            }
+                            # Capture and yield signature
+                            if chunk_signature:
+                                tc["thought_signature"] = chunk_signature
+                            elif part.thought_signature:
+                                tc["thought_signature"] = part.thought_signature
+                                
+                            yield {
+                                "tool_calls": [tc]
+                            }
+                        
+                except Exception as e:
+                    continue
+        except Exception as e:
+            raise Exception(f"Google API error: {str(e)}")
+
+    def _parse_content_to_parts_new_sdk(self, content: str) -> List:
+        """Convert string content with <thought> tags into Gemini parts using new SDK types"""
+        if not content:
+            return []
+        
+        from google.genai import types
+        import re
+        parts = []
+        
+        # Find all thought blocks
+        pattern = r"<thought>(.*?)</thought>"
+        
+        # Find thoughts and extract them from the main content to avoid duplicates/confusion
+        matches = list(re.finditer(pattern, content, re.DOTALL))
+        if matches:
+            last_pos = 0
+            for match in matches:
+                # Text before this thought
+                before = content[last_pos:match.start()].strip()
+                if before:
+                    parts.append(types.Part.from_text(text=before))
+                
+                # The thought
+                thought_val = match.group(1).strip()
+                if thought_val:
+                    # New SDK might handle thought parts differently, but usually as a 'thought' field in Part
+                    # In many cases it might just be text if not using specialized thinking model
+                    # But if the SDK supports 'thought' attribute on Part:
+                    part = types.Part(thought=thought_val)
+                    parts.append(part)
+                
+                last_pos = match.end()
+            
+            # Text after last thought
+            after = content[last_pos:].strip()
+            if after:
+                parts.append(types.Part.from_text(text=after))
+        else:
+            if content.strip():
+                parts = [types.Part.from_text(text=content)]
+            
+        return parts
+
+    def _parse_content_to_parts(self, content: str) -> List[Dict]:
+        """Convert string content with <thought> tags into Gemini parts"""
+        if not content:
+            return []
+        
+        import re
+        parts = []
+        
+        # Find all thought blocks
+        pattern = r"<thought>(.*?)</thought>"
+        last_end = 0
+        
+        # Priority: Process thoughts first if they exist
+        # Note: Gemini 2.0 Thinking usually wants thoughts at the beginning
+        thought_parts = []
+        text_content = content
+        
+        # Find thoughts and extract them from the main content to avoid duplicates/confusion
+        matches = list(re.finditer(pattern, content, re.DOTALL))
+        if matches:
+            # We'll build a clean text content by removing thought blocks
+            clean_parts = []
+            last_pos = 0
+            for match in matches:
+                # Text before this thought
+                before = content[last_pos:match.start()].strip()
+                if before:
+                    clean_parts.append({"text": before})
+                
+                # The thought
+                thought_val = match.group(1).strip()
+                if thought_val:
+                    thought_parts.append({"thought": thought_val})
+                
+                last_pos = match.end()
+            
+            # Text after last thought
+            after = content[last_pos:].strip()
+            if after:
+                clean_parts.append({"text": after})
+            
+            # Combine: Thought(s) first, then text
+            parts = thought_parts + clean_parts
+        else:
+            if content.strip():
+                parts = [{"text": content}]
+            
+        return parts
+
+    def _proto_to_dict(self, obj):
+        """Recursively convert Google proto/MapComposite objects to standard Python dicts/lists"""
+        if hasattr(obj, "items"):
+            return {k: self._proto_to_dict(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._proto_to_dict(x) for x in obj]
+        elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
+            try:
+                return [self._proto_to_dict(x) for x in obj]
+            except:
+                return obj
+        return obj
+
+    def get_available_models(self) -> List[str]:
+        return [
+            "gemini-2.0-flash-thinking-exp-1219",
+            "gemini-2.0-flash-exp",
+            "gemini-1.5-flash", 
+            "gemini-1.5-pro", 
+            "gemini-pro", 
+            "gemini-pro-vision"
+        ]
+
 
 
 class AnthropicProvider(AIProvider):
@@ -161,7 +753,6 @@ class AnthropicProvider(AIProvider):
         super().__init__(api_key)
         try:
             import anthropic
-
             self.client = anthropic.AsyncAnthropic(api_key=api_key)
         except ImportError:
             raise ImportError(
@@ -172,7 +763,6 @@ class AnthropicProvider(AIProvider):
         self, messages: List[Dict], model: str = "claude-3-sonnet-20240229", **kwargs
     ) -> str:
         try:
-            # Convert messages format for Anthropic
             system_message = ""
             user_messages = []
 
@@ -198,7 +788,6 @@ class AnthropicProvider(AIProvider):
     ):
         """Generate streaming response"""
         try:
-            # Convert messages format for Anthropic
             system_message = ""
             user_messages = []
 
@@ -226,123 +815,6 @@ class AnthropicProvider(AIProvider):
             "claude-3-sonnet-20240229",
             "claude-3-haiku-20240307",
         ]
-
-
-class GoogleProvider(AIProvider):
-    """Google provider implementation"""
-
-    def __init__(self, api_key: str):
-        super().__init__(api_key)
-        try:
-            import google.generativeai as genai
-
-            genai.configure(api_key=api_key)
-            self.genai = genai
-        except ImportError:
-            raise ImportError(
-                "Google Generative AI library not installed. Run: pip install google-generativeai"
-            )
-
-    async def generate_response(
-        self, messages: List[Dict], model: str = "gemini-pro", **kwargs
-    ) -> str:
-        try:
-            model_instance = self.genai.GenerativeModel(model)
-
-            # Convert messages to Google format with clear separators
-            prompt = ""
-            for msg in messages:
-                if msg["role"] == "system":
-                    prompt += f"System: {msg['content']}\n\n"
-                elif msg["role"] == "user":
-                    prompt += f"User: {msg['content']}\n\n"
-                elif msg["role"] == "assistant":
-                    prompt += f"Assistant: {msg['content']}\n\n"
-
-            response = await model_instance.generate_content_async(
-                prompt,
-                generation_config=self.genai.types.GenerationConfig(
-                    max_output_tokens=kwargs.get("max_tokens", 4096),
-                    temperature=kwargs.get("temperature", 0.7),
-                ),
-            )
-            try:
-                return response.text
-            except ValueError as ve:
-                if "Invalid operation: The `response.text` quick accessor" in str(ve):
-                    # Handle response with no valid parts
-                    if hasattr(response, "candidates") and response.candidates:
-                        # Try to get text from the candidate parts
-                        for candidate in response.candidates:
-                            if hasattr(candidate, "content") and hasattr(
-                                candidate.content, "parts"
-                            ):
-                                for part in candidate.content.parts:
-                                    if hasattr(part, "text") and part.text:
-                                        return part.text
-                    return (
-                        "No response generated"  # Return empty string if no text found
-                    )
-                else:
-                    raise ve
-        except Exception as e:
-            raise Exception(f"Google API error: {str(e)}")
-
-    async def generate_response_stream(
-        self, messages: List[Dict], model: str = "gemini-pro", **kwargs
-    ):
-        """Generate streaming response"""
-        try:
-            model_instance = self.genai.GenerativeModel(model)
-
-            # Convert messages to Google format with clear separators
-            prompt = ""
-            for msg in messages:
-                if msg["role"] == "system":
-                    prompt += f"System: {msg['content']}\n\n"
-                elif msg["role"] == "user":
-                    prompt += f"User: {msg['content']}\n\n"
-                elif msg["role"] == "assistant":
-                    prompt += f"Assistant: {msg['content']}\n\n"
-
-            response = model_instance.generate_content(
-                prompt,
-                generation_config=self.genai.types.GenerationConfig(
-                    max_output_tokens=kwargs.get("max_tokens", 4096),
-                    temperature=kwargs.get("temperature", 0.7),
-                ),
-                stream=True,
-            )
-
-            # Use asyncio to avoid blocking on synchronous iteration
-            import asyncio
-            
-            for chunk in response:
-                try:
-                    if hasattr(chunk, "text") and chunk.text:
-                        yield chunk.text
-                        # Allow other async tasks to run
-                        await asyncio.sleep(0)
-                    elif hasattr(chunk, "parts") and chunk.parts:
-                        # Handle response with parts but no direct text
-                        for part in chunk.parts:
-                            if hasattr(part, "text") and part.text:
-                                yield part.text
-                                await asyncio.sleep(0)
-                except ValueError as ve:
-                    # Handle the case where chunk.text is accessed but no valid parts exist
-                    if "Invalid operation: The `response.text` quick accessor" in str(
-                        ve
-                    ):
-                        continue
-                    else:
-                        # Re-raise other ValueErrors
-                        raise ve
-        except Exception as e:
-            raise Exception(f"Google API error: {str(e)}")
-
-    def get_available_models(self) -> List[str]:
-        return ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro", "gemini-pro-vision"]
 
 
 class TogetherProvider(AIProvider):
@@ -800,6 +1272,11 @@ class AIEngine:
         """Get list of available providers"""
         return list(self.providers.keys())
 
+    def get_all_tool_schemas(self) -> List[Dict]:
+        """Get schemas for all registered tools"""
+        # Return only the 'schema' part for each tool
+        return [tool.get_schema() for tool in self.tool_registry.tools.values()]
+
     def get_provider_models(self, provider: str) -> List[str]:
         """Get available models for a provider"""
         if provider in self.providers:
@@ -857,6 +1334,9 @@ class AIEngine:
             else:
                 model = available_models[0] if available_models else None
 
+        # Get all tool schemas for native tool calling
+        tools = self.get_all_tool_schemas()
+
         config = self.config_manager.get_config()
         # Use unlimited tokens (or max available for the model)
         max_tokens = config.get("max_tokens", None)  # None = unlimited
@@ -866,16 +1346,30 @@ class AIEngine:
         response = await ai_provider.generate_response(
             messages=messages,
             model=model,
+            tools=tools,
             max_tokens=max_tokens or 16384,  # Use large default if None
             temperature=config.get("temperature", 0.7),
         )
 
-        # Check if response contains tool calls
-        has_tools = self._contains_tool_calls(response)
-        if has_tools:
-            response = await self._execute_tools(response, project_path)
+        # Check if response contains tool calls (either string or dict)
+        has_tools = False
+        if isinstance(response, dict) and "tool_calls" in response:
+            has_tools = True
+        elif isinstance(response, str):
+            has_tools = self._contains_tool_calls(response)
 
-        return response
+        if has_tools:
+            # Recursion logic handled inside _process_response_with_tools
+            # We convert generator to string for non-streaming process_message
+            full_response = ""
+            async for chunk in self._process_response_with_tools(
+                response, project_path, messages, ai_provider, model, config
+            ):
+                if isinstance(chunk, str):
+                    full_response += chunk
+            return full_response
+
+        return response if isinstance(response, str) else response.get("content", "")
 
     async def process_message_stream(
         self,
@@ -886,6 +1380,7 @@ class AIEngine:
         context: List[Dict] = None,
         conversation_history: List[Dict] = None,
         confirmation_manager = None,
+        memory_manager = None,
     ):
         """Process a user message and generate streaming AI response"""
 
@@ -942,11 +1437,16 @@ class AIEngine:
         if max_tokens == 0 or max_tokens == -1:
             max_tokens = None  # Treat 0 or -1 as unlimited
 
-        # Route all providers (including Ollama) through live tool detection
-
-        # Stream response with real-time tool detection and execution
         async for chunk in self._stream_with_live_tools(
-            ai_provider, messages, model, max_tokens, config, project_path, confirmation_manager
+            ai_provider=ai_provider,
+            messages=messages,
+            model=model,
+            max_tokens=max_tokens or 16384,
+            config=config,
+            project_path=project_path,
+            confirmation_manager=confirmation_manager,
+            memory_manager=memory_manager,
+            recursion_depth=0,
         ):
             yield chunk
 
@@ -959,307 +1459,259 @@ class AIEngine:
         config: dict,
         project_path: str,
         confirmation_manager = None,
+        memory_manager = None,
         recursion_depth: int = 0,
     ):
-        """Stream AI response with real-time tool detection and execution"""
+        """Stream AI response with native tool support and automatic continuation"""
         import json
         import re
 
         # Prevent infinite recursion
-        MAX_RECURSION_DEPTH = 10
+        MAX_RECURSION_DEPTH = 50
         if recursion_depth >= MAX_RECURSION_DEPTH:
             yield "\n**WARNING:** Maximum continuation depth reached.\n"
             return
 
-        # Buffer to accumulate streaming response
-        buffer = ""
-        yielded_length = 0
-        in_json_block = False
-        json_block_start = -1
+        # Get all tool schemas for native tool calling
+        tools = self.get_all_tool_schemas()
+        
+        # Buffer to accumulate text and tool calls
+        text_buffer = ""
+        current_tool_calls = []
         has_executed_tools = False
         tool_results = []
-
-        # Check if provider supports streaming
-        if not hasattr(ai_provider, "generate_response_stream"):
-            # Fall back to non-streaming
-            response = await ai_provider.generate_response(
-                messages=messages,
-                model=model,
-                max_tokens=max_tokens or 16384,
-                temperature=config.get("temperature", 0.7),
-            )
-            async for chunk in self._process_response_with_tools(
-                response, project_path, messages, ai_provider, model, config, confirmation_manager
-            ):
-                yield chunk
-            return
+        # Total response for this turn (excluding previous turns in recursion)
+        turn_response = ""
+        # Buffers for streaming tool call suppression
+        json_mode = False
+        json_buffer = ""
+        already_executed_calls = [] # List of (name, args_json) to avoid duplicates
 
         # Stream the response
         try:
             async for chunk in ai_provider.generate_response_stream(
                 messages=messages,
                 model=model,
+                tools=tools,
                 max_tokens=max_tokens or 16384,
                 temperature=config.get("temperature", 0.7),
             ):
                 if not chunk:
                     continue
 
-                buffer += chunk
-
-                # Check for JSON block markers
-                if not in_json_block:
-                    # Look for start of JSON block (with code fence)
-                    # Match ```json even without newline (streaming might not have it yet)
-                    json_start_match = re.search(
-                        r"```json", buffer[yielded_length:]
-                    )
+                if isinstance(chunk, dict) and "tool_calls" in chunk:
+                    # Native tool call detected in stream
+                    for tc in chunk["tool_calls"]:
+                        current_tool_calls.append(tc)
+                elif isinstance(chunk, str):
+                    # Robust streaming suppression for manual JSON tool calls
+                    text_buffer += chunk
+                    turn_response += chunk
                     
-                    # Look for raw JSON blocks (without code fence) - for OpenRouter models
-                    # More flexible pattern that handles various formats
-                    raw_json_match = re.search(
-                        r'(?:json\s*)?\{\s*"(?:tool_code|tool)"\s*:\s*"[^"]+"\s*,\s*"args"\s*:\s*\{',
-                        buffer[yielded_length:]
-                    )
-                    
-                    if json_start_match:
-                        # Found start of JSON block with code fence
-                        in_json_block = True
-                        json_block_start = yielded_length + json_start_match.start()
-
-                        # Yield everything BEFORE the JSON block
-                        if json_block_start > yielded_length:
-                            text_to_yield = buffer[yielded_length:json_block_start]
-                            text_to_yield = self._clean_model_syntax(text_to_yield)
-                            if text_to_yield.strip():
-                                yield text_to_yield
-                        yielded_length = json_block_start
-                    elif raw_json_match:
-                        # Found raw JSON block (OpenRouter format)
-                        in_json_block = True
-                        # Find the actual { character
-                        match_text = raw_json_match.group(0)
-                        json_start_in_match = match_text.rfind('{')
-                        json_block_start = yielded_length + raw_json_match.start() + json_start_in_match
-                        
-                        # Yield everything BEFORE the JSON block
-                        if json_block_start > yielded_length:
-                            text_to_yield = buffer[yielded_length:json_block_start]
-                            text_to_yield = self._clean_model_syntax(text_to_yield)
-                            if text_to_yield.strip():
-                                yield text_to_yield
-                        yielded_length = json_block_start
-                    else:
-                        # No JSON block yet
-                        # Don't yield if we might be about to see JSON - buffer a bit
-                        remaining = buffer[yielded_length:]
-                        
-                        # If the remaining text looks like it might be leading to JSON, don't yield yet
-                        # Check for partial JSON markers
-                        if remaining.endswith('`') or remaining.endswith('``') or remaining.endswith('```') or \
-                           remaining.endswith('```j') or remaining.endswith('```js') or remaining.endswith('```jso') or \
-                           remaining.endswith('{') or remaining.endswith('{"') or remaining.endswith('{"tool'):
-                            # Might be starting JSON, don't yield yet
-                            pass
-                        else:
-                            # Safe to yield - but leave last 10 chars in buffer in case JSON starts
-                            if len(remaining) > 10:
-                                text_to_yield = remaining[:-10]
-                                text_to_yield = self._clean_model_syntax(text_to_yield)
-                                if text_to_yield:
-                                    yield text_to_yield
-                                yielded_length = len(buffer) - 10
-                else:
-                    # Inside JSON block, look for the end
-                    # Check if this is a code-fenced block or raw JSON
-                    is_code_fenced = buffer[json_block_start:json_block_start+7] == "```json"
-                    
-                    if is_code_fenced:
-                        # Look for closing ``` - more flexible pattern
-                        json_end_match = re.search(r"[\r\n]+```", buffer[json_block_start:])
-                        if json_end_match:
-                            json_block_end = json_block_start + json_end_match.end()
-                            json_block = buffer[json_block_start:json_block_end]
+                    if not json_mode:
+                        if "```json" in chunk:
+                            # Start of a potential tool call
+                            start_idx = chunk.find("```json")
+                            # Yield text before the block
+                            if start_idx > 0:
+                                yield chunk[:start_idx]
                             
-                            # Extract JSON from code fence - flexible pattern
-                            json_pattern = r"```json\s*[\r\n]+(.*?)[\r\n]+```"
-                            match = re.search(json_pattern, json_block, re.DOTALL)
-                            if match:
-                                json_content = match.group(1).strip()
+                            json_mode = True
+                            json_buffer = chunk[start_idx:]
+                        else:
+                            # Normal text, just yield
+                            yield chunk
+                    else:
+                        # We are currently buffering a potential tool call
+                        json_buffer += chunk
+                        
+                        if "```" in chunk[chunk.find("```") + 3:] or (chunk.strip().endswith("```") and "```json" not in chunk):
+                            # End of the block
+                            end_idx = json_buffer.rfind("```")
+                            full_block = json_buffer
+                            
+                            # Check if the closed block looks like a tool call
+                            if "\"tool_code\"" in full_block:
+                                # It's a tool call! Suppress it from UI output.
+                                # Execute it ASAP to improve user experience
+                                try:
+                                    # Extract JSON from inside the block
+                                    json_text_match = re.search(r"```json\s*\n?(.*?)\n?```", full_block, re.DOTALL)
+                                    if json_text_match:
+                                        tc_data = json.loads(json_text_match.group(1).strip())
+                                        tc_name = tc_data.get("tool_code")
+                                        tc_args_dict = tc_data.get("args", {})
+                                        tc_args_json = json.dumps(tc_args_dict)
+                                        
+                                        # Execute if not already done
+                                        if (tc_name, tc_args_json) not in already_executed_calls:
+                                            # Yield some status and execute
+                                            yield f"\n[Executing {tc_name}...]\n"
+                                            
+                                            async for tool_ui_output in self._execute_single_tool_live(
+                                                {"tool_code": tc_name, "args": tc_args_dict}, 
+                                                project_path, 
+                                                tool_results, 
+                                                confirmation_manager
+                                            ):
+                                                yield tool_ui_output
+                                            
+                                            already_executed_calls.append((tc_name, tc_args_json))
+                                            has_executed_tools = True
+                                            
+                                            # Special handling: if it was response_control end_response,
+                                            # we might want to flag it here.
+                                            if tc_name == "response_control" and tc_args_dict.get("operation") == "end_response":
+                                                has_end_response = True
+                                except Exception as e:
+                                    # If parsing/execution fails mid-stream, we'll let the final loop try again
+                                    pass
                             else:
-                                json_content = None
-                        else:
-                            json_content = None
-                    else:
-                        # Raw JSON - look for closing }
-                        # Count braces to find the matching closing brace
-                        brace_count = 0
-                        json_block_end = None
-                        for i in range(json_block_start, len(buffer)):
-                            if buffer[i] == '{':
-                                brace_count += 1
-                            elif buffer[i] == '}':
-                                brace_count -= 1
-                                if brace_count == 0:
-                                    json_block_end = i + 1
-                                    break
-                        
-                        if json_block_end:
-                            json_block = buffer[json_block_start:json_block_end]
-                            json_content = json_block.strip()
-                        else:
-                            json_content = None
-                    
-                    # If we have complete JSON, parse and execute
-                    if json_content:
-                        try:
-                            # Sanitize JSON: escape unescaped newlines and control chars in string values
-                            try:
-                                tool_call = json.loads(json_content)
-                            except json.JSONDecodeError as je:
-                                # Try to fix common issues: unescaped newlines in strings
-                                import re as regex
-                                json_content = regex.sub(
-                                    r'("(?:[^"\\]|\\.)*")',
-                                    lambda m: m.group(1).replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t'),
-                                    json_content
-                                )
-                                tool_call = json.loads(json_content)
-
-                            # Execute tool and yield result immediately
-                            async for tool_result in self._execute_single_tool_live(
-                                tool_call, project_path, tool_results, confirmation_manager
-                            ):
-                                yield tool_result
-
-                            has_executed_tools = True
-
-                        except json.JSONDecodeError:
-                            pass  # JSON parsing failed, will try auto-close at end
-                        except Exception:
-                            pass  # Tool execution failed silently
-
-                        # Update state
-                        in_json_block = False
-                        yielded_length = json_block_end
-                        json_block_start = -1
-
-            # Handle incomplete JSON at end of stream
-            if in_json_block and json_block_start >= 0:
-                # Stream ended while we were in a JSON block
-                # Try to extract and execute whatever JSON we have
-                incomplete_json = buffer[json_block_start:].strip()
-                
-                # Try to extract JSON from code fence if present
-                if incomplete_json.startswith("```json"):
-                    json_pattern = r"```json\s*\n(.*?)(?:\n```)?$"
-                    match = re.search(json_pattern, incomplete_json, re.DOTALL)
-                    if match:
-                        json_content = match.group(1).strip()
-                    else:
-                        json_content = incomplete_json
+                                # Not a tool call, flush the buffer to user
+                                yield full_block
+                            
+                            json_mode = False
+                            json_buffer = ""
+                            
+                            # Handle any text after the closing backticks in the same chunk
+                            # (Though usually chunks end at boundaries, let's be safe)
+                            closing_match = re.search(r"```(?!json)(.*)", chunk, re.DOTALL)
+                            if closing_match:
+                                remaining = closing_match.group(1)
+                                if remaining.strip():
+                                    yield remaining
                 else:
-                    json_content = incomplete_json
+                    # Generic chunk handling
+                    yield str(chunk)
+
+            # After stream ends, check if we have tool calls to execute
+            # Combine native tool calls and manual ones from the text buffer
+            final_tool_calls = current_tool_calls.copy()
+            
+            # Extract manual tool calls from text_buffer
+            manual_matches = []
+            manual_matches.extend(re.findall(r"```json\s*\n?(.*?)\n?```", text_buffer, re.DOTALL))
+            if not manual_matches:
+                 manual_matches.extend(re.findall(r"({[^{]*\"tool_code\"[^{]*})", text_buffer, re.DOTALL))
+
+            for match in manual_matches:
+                try:
+                    tc_data = json.loads(match.strip())
+                    if "tool_code" in tc_data:
+                        # Normalize to native format
+                        tc_name = tc_data.get("tool_code")
+                        tc_args = json.dumps(tc_data.get("args", {}))
+                        
+                        # Avoid duplicates if it's already in current_tool_calls
+                        is_dup = any(c.get("function", {}).get("name") == tc_name and 
+                                     c.get("function", {}).get("arguments") == tc_args 
+                                     for c in current_tool_calls)
+                        
+                        if not is_dup:
+                            final_tool_calls.append({
+                                "type": "function",
+                                "function": {
+                                    "name": tc_name,
+                                    "arguments": tc_args
+                                }
+                            })
+                except: continue
+
+            if final_tool_calls:
+                # CRITICAL: Record the assistant's intent. 
+                # For Gemini, the next message MUST respond to EVERY tool_call listed here.
+                assistant_msg = {"role": "assistant", "content": text_buffer}
+                assistant_msg["tool_calls"] = final_tool_calls
                 
-                # Try to parse and execute
-                if json_content and json_content.startswith('{'):
+                # Propagate thought_signature if available
+                thought_sig = None
+                for tc in final_tool_calls:
+                    if tc.get("thought_signature"):
+                        thought_sig = tc["thought_signature"]
+                        break
+                
+                if thought_sig:
+                    assistant_msg["thought_signature"] = thought_sig
+                    # Attach signature back to all calls for consistency in the message history
+                    for tc in final_tool_calls:
+                        tc["thought_signature"] = thought_sig
+
+                messages.append(assistant_msg)
+                
+                # Save to persistent memory
+                if memory_manager:
+                    metadata = {"tool_calls": final_tool_calls}
+                    if thought_sig:
+                        metadata["thought_signature"] = thought_sig
+                    memory_manager.add_message("assistant", turn_response, metadata=metadata)
+
+                # Execute all tool calls that haven't been executed yet
+                for tc in final_tool_calls:
+                    func = tc.get("function", {})
+                    tool_name = func.get("name")
                     try:
-                        tool_call = json.loads(json_content)
-                        # Execute tool
-                        async for tool_result in self._execute_single_tool_live(
-                            tool_call, project_path, tool_results, confirmation_manager
+                        args_json = func.get("arguments", "{}")
+                        args = json.loads(args_json) if isinstance(args_json, str) else args_json
+                        args_json_str = json.dumps(args)
+                    except:
+                        args = {}
+                        args_json_str = "{}"
+                    
+                    # Avoid double execution
+                    if (tool_name, args_json_str) in already_executed_calls:
+                        # But we still need to add to messages for history!
+                        # The tool_results list already has the data from eager execution.
+                        # We just need to find it to build the tool_msg.
+                        # tool_results is shared so it's all there.
+                        pass
+                    else:
+                        # Execute now
+                        async for tool_ui_output in self._execute_single_tool_live(
+                            {"tool_code": tool_name, "args": args}, 
+                            project_path, 
+                            tool_results, 
+                            confirmation_manager
                         ):
-                            yield tool_result
-                        has_executed_tools = True
-                    except json.JSONDecodeError as je:
-                        # Try to auto-close the JSON by adding missing braces
-                        open_braces = json_content.count('{')
-                        close_braces = json_content.count('}')
-                        missing_braces = open_braces - close_braces
-                        
-                        if missing_braces > 0:
-                            # Add missing closing braces
-                            auto_closed = json_content + ('}' * missing_braces)
-                            try:
-                                tool_call = json.loads(auto_closed)
-                                # Execute tool
-                                async for tool_result in self._execute_single_tool_live(
-                                    tool_call, project_path, tool_results, confirmation_manager
-                                ):
-                                    yield tool_result
-                                has_executed_tools = True
-                            except json.JSONDecodeError:
-                                pass  # Could not parse even after auto-closing
-            
-            # Yield any remaining content
-            if yielded_length < len(buffer):
-                remaining = buffer[yielded_length:]
-                if not in_json_block:
-                    remaining = self._clean_model_syntax(remaining)
-                    if remaining.strip():
-                        yield remaining
+                            yield tool_ui_output
+                        already_executed_calls.append((tool_name, args_json_str))
+                    
+                    # ALWAYS add tool result to message history for Gemini consistency
+                    # Find matching result
+                    last_result = {"success": False, "error": "Result missing"}
+                    # We might have many results, try to match by tool name at least
+                    for r in reversed(tool_results):
+                         if r.get("tool") == tool_name or r.get("type") == tool_name:
+                             last_result = r
+                             break
 
-            # Check if end_response was called
-            has_end_response = any(
-                r.get("type") == "control" and r.get("message") == "end_response"
-                for r in tool_results
-            )
+                    tool_msg = {
+                        "role": "tool",
+                        "name": tool_name,
+                        "tool_call_id": tc.get("id", tool_name),
+                        "content": json.dumps(last_result)
+                    }
+                    messages.append(tool_msg)
+                    
+                    if memory_manager:
+                        memory_manager.add_message("tool", tool_msg["content"], metadata={
+                            "name": tool_name,
+                            "tool_call_id": tool_msg["tool_call_id"]
+                        })
+                    
+                    has_executed_tools = True
 
-            # Don't auto-continue if:
-            # 1. end_response was explicitly called
-            # 2. No tools were executed
-            # 3. Max recursion depth reached
-            
-            # Debug: Check if we have file reads that need continuation
-            has_file_reads = any(r.get("type") == "file_read" for r in tool_results)
-            
-            if (
-                has_end_response
-                or not has_executed_tools
-                or recursion_depth >= MAX_RECURSION_DEPTH
-            ):
-                # Special case: if we have file reads but no continuation, force it
-                if has_file_reads and not has_end_response and recursion_depth < MAX_RECURSION_DEPTH:
-                    pass  # Don't return, allow continuation
-                else:
-                    return
-
-            # Only continue if the auto-continuation manager says so
-            if self.auto_continuation.should_continue(tool_results, has_end_response, buffer):
-                yield "... \n"
-
-                # Add assistant's response to messages
-                messages.append({"role": "assistant", "content": buffer})
-
-                # Build file content section to inject into system prompt
-                file_contents_section = ""
-                for result in tool_results:
-                    if result.get("type") == "file_read":
-                        file_path = result.get("file_path", "unknown")
-                        content = result.get("content", "")
-                        file_contents_section += f"\n\n{'='*70}\n"
-                        file_contents_section += f"FILE CONTENT: {file_path}\n"
-                        file_contents_section += f"{'='*70}\n"
-                        file_contents_section += f"{content}\n"
-                        file_contents_section += f"{'='*70}\n"
-                
-                # If we have file contents, update the system message to include them
-                if file_contents_section:
-                    # Find and update the system message
-                    for msg in messages:
-                        if msg.get("role") == "system":
-                            msg["content"] += f"\n\n## FILES YOU JUST READ:\n{file_contents_section}"
-                            break
-
-                # Build continuation prompt (without file content since it's in system now)
-                continuation_prompt = self.auto_continuation.build_continuation_prompt(
-                    tool_results, buffer
+                # Check if we should stop (e.g. response_control end_response)
+                has_end_response = any(
+                    r.get("type") == "control" and r.get("message") == "end_response"
+                    for r in tool_results
                 )
 
-                # Add continuation prompt to messages
-                messages.append({"role": "user", "content": continuation_prompt})
+                if has_end_response:
+                    return
 
-                # Recursively stream continuation with updated messages
+                # RECURSIVE CONTINUATION
+                # Remove manual continuation prompts entirely.
+                # Just call itself again with updated history.
                 async for chunk in self._stream_with_live_tools(
                     ai_provider,
                     messages,
@@ -1268,15 +1720,19 @@ class AIEngine:
                     config,
                     project_path,
                     confirmation_manager,
-                    recursion_depth + 1,
+                    memory_manager,
+                    recursion_depth + 1
                 ):
                     yield chunk
-
+            else:
+                # No more tools, this is the final final response part of the turn
+                if memory_manager and turn_response:
+                    memory_manager.add_message("assistant", turn_response)
+            
         except Exception as e:
             import traceback
-
-            yield f"\n**ERROR:** {str(e)}\n"
-            yield f"\n**Traceback:**\n{traceback.format_exc()}\n"
+            yield f"\n[Error in stream: {str(e)}]\n"
+            yield f"\n[Traceback]\n{traceback.format_exc()}\n"
 
     def _format_tool_box(self, title: str, content_lines: list, width: int = 65) -> str:
         """Format a tool execution box with proper alignment"""
@@ -1485,12 +1941,19 @@ class AIEngine:
 
             elif tool_name == "file_operations":
                 file_path = args.get("file_path")
-                if file_path and project_path:
+                dir_path = args.get("dir_path")
+                target_path = file_path or dir_path
+                
+                if target_path and project_path:
                     from pathlib import Path
 
-                    path = Path(file_path)
+                    path = Path(target_path)
                     if not path.is_absolute():
-                        args["file_path"] = str(Path(project_path) / file_path)
+                        resolved_path = str(Path(project_path) / target_path)
+                        if file_path:
+                            args["file_path"] = resolved_path
+                        if dir_path:
+                            args["dir_path"] = resolved_path
                 
                 # Ask for confirmation if not in YOLO mode (skip for read operations)
                 operation = args.get("operation")
@@ -1847,7 +2310,7 @@ class AIEngine:
 
     async def _process_response_with_tools(
         self,
-        response: str,
+        response: Any,
         project_path: str,
         messages: list,
         ai_provider,
@@ -1856,597 +2319,144 @@ class AIEngine:
         confirmation_manager = None,
         recursion_depth: int = 0,
     ):
-        """Process response and execute tools with AI continuation"""
+        """Process response and execute tools with native tool support and automatic continuation"""
         import json
         import re
 
-        # Clean model-specific syntax tokens from response
-        response = self._clean_model_syntax(response)
-
-        # Limit recursion to prevent infinite loops
-        MAX_RECURSION_DEPTH = (
-            999999  # Effectively unlimited - AI will continue until task is complete
-        )
+        # Prevent infinite recursion
+        MAX_RECURSION_DEPTH = 50
         if recursion_depth >= MAX_RECURSION_DEPTH:
-            # Silently stop recursion without warning
-            yield response
-            yield "\n\n**WARNING:** Maximum continuation depth reached. Please continue manually if needed.\n"
+            yield "\n**WARNING:** Maximum continuation depth reached.\n"
             return
 
-        # Find JSON tool calls in the response (standard format)
-        json_pattern = r"```json\s*\n(.*?)\n```"
-        matches = re.findall(json_pattern, response, re.DOTALL)
+        # Handle different response formats (string or dict with tool_calls)
+        text_content = ""
+        final_tool_calls = []
 
-        # Also check for alternative formats (e.g., GPT-OSS)
-        alt_tool_calls = self._parse_alternative_tool_calls(response)
-
-        if not matches and not alt_tool_calls:
-            # No tools found, just yield the response
-            yield response
-            return
-
-        # Yield any text BEFORE the first tool call immediately
-        first_tool_pos = response.find("```json")
-        if first_tool_pos > 0:
-            text_before_tools = response[:first_tool_pos].strip()
-            if text_before_tools:
-                yield text_before_tools + "\n"
-
-        # Process and execute tool calls LIVE - show results immediately
-        tool_results = []
-        should_end_response = False
-        has_executed_tools = False
-
-        # Combine standard JSON matches and alternative format tool calls
-        all_tool_calls = []
-
-        # Parse standard JSON format
-        for match in matches:
-            try:
-                tool_call = json.loads(match.strip())
-                all_tool_calls.append(tool_call)
-            except json.JSONDecodeError:
-                continue
-
-        # Add alternative format tool calls
-        all_tool_calls.extend(alt_tool_calls)
-
-        for tool_call in all_tool_calls:
-            try:
-                tool_name = tool_call.get("tool_code")
-                args = tool_call.get("args", {})
-
-                # Check for response control tool
-                if tool_name == "response_control":
-                    operation = args.get("operation", "end_response")
-                    if operation == "end_response":
-                        should_end_response = True
-                        yield "\n**SUCCESS:** Response Completed\n"
-                        tool_results.append(
-                            {"type": "control", "message": "end_response"}
-                        )
-                    continue
-
-                # Mark that we've executed tools
-                has_executed_tools = True
-
-                # Execute the tool
-                if tool_name == "command_runner":
-                    # Ask for confirmation if not in YOLO mode
-                    if confirmation_manager and not confirmation_manager.is_yolo_mode():
-                        cmd_args = args.copy()
-                        if "operation" not in cmd_args:
-                            cmd_args["operation"] = "run_command"
-                        if "cwd" not in cmd_args:
-                            cmd_args["cwd"] = project_path or "."
-                        
-                        confirmed = await confirmation_manager.confirm_operation("command_runner", cmd_args)
-                        if not confirmed:
-                            # User cancelled the operation
-                            yield "\n**CANCELLED:** Command execution cancelled by user\n"
-                            tool_results.append({"type": "cancelled", "tool": "command_runner", "success": False})
-                            continue
-                    
-                    cmd_args = args.copy()
-                    if "operation" not in cmd_args:
-                        cmd_args["operation"] = "run_command"
-                    if "cwd" not in cmd_args:
-                        cmd_args["cwd"] = project_path or "."
-
-                    result = await self.tool_registry.execute_tool(
-                        "command_runner", user_id="ai_engine", **cmd_args
-                    )
-                    if result.success:
-                        command = args.get("command", "unknown")
-                        operation = cmd_args.get("operation", "run_command")
-
-                        # Check if this is an async command
-                        if result.data.get("background", False):
-                            # Background command - show process ID
-                            process_id = result.data.get("process_id", "unknown")
-                            pid = result.data.get("pid", "unknown")
-                            content = [
-                                f"Command: {command}",
-                                f"Status:  Running in background",
-                                f"Process: {process_id} (PID: {pid})",
-                                f"Tip:     Use /ct {process_id} to terminate",
-                            ]
-                            box = self._format_tool_box(
-                                "TOOL: command_runner (background)", content
-                            )
-                            yield box
-                            tool_results.append(
-                                {
-                                    "type": "command",
-                                    "command": command,
-                                    "output": f"Background process started: {process_id}",
-                                    "success": True,
-                                }
-                            )
-                        else:
-                            # Synchronous command - show output
-                            full_output = (
-                                result.data.get("output", "")
-                                if isinstance(result.data, dict)
-                                else str(result.data)
-                            )
-
-                            # Truncate very long output for display
-                            display_output = full_output
-                            if len(full_output) > 5000:
-                                display_output = (
-                                    full_output[:5000]
-                                    + f"\n\n... [Output truncated - {len(full_output)} total characters]"
-                                )
-
-                            content = [f"Command: {command}", ""]
-                            if display_output.strip():
-                                content.append("Output:")
-                                # Add output lines, limit to 10 lines
-                                output_lines = display_output.split("\n")[:10]
-                                for line in output_lines:
-                                    truncated_line = line[:57]
-                                    content.append(truncated_line)
-                                if len(display_output.split("\n")) > 10:
-                                    content.append("...")
-
-                            box = self._format_tool_box("TOOL: command_runner", content)
-                            yield box
-                            tool_results.append(
-                                {
-                                    "type": "command",
-                                    "command": command,
-                                    "output": full_output,
-                                    "success": True,
-                                }
-                            )
-                    else:
-                        error_msg = f"\n**ERROR:** Command Error: {result.error}\n"
-                        yield error_msg
-                        tool_results.append(
-                            {"type": "error", "error": result.error, "success": False}
-                        )
-
-                elif tool_name == "file_operations":
-                    # Prepend project_path to relative file paths
-                    file_path = args.get("file_path")
-                    if file_path and project_path:
-                        from pathlib import Path
-
-                        path = Path(file_path)
-                        if not path.is_absolute():
-                            args["file_path"] = str(Path(project_path) / file_path)
-                    
-                    # Ask for confirmation if not in YOLO mode (skip for read operations)
-                    operation = args.get("operation")
-                    if confirmation_manager and not confirmation_manager.is_yolo_mode():
-                        # Only confirm write/modify/delete operations, not reads
-                        if operation not in ["read_file", "read_file_lines", "list_directory"]:
-                            confirmed = await confirmation_manager.confirm_operation("file_operations", args)
-                            if not confirmed:
-                                # User cancelled the operation
-                                yield "\n**CANCELLED:** File operation cancelled by user\n"
-                                tool_results.append({"type": "cancelled", "tool": "file_operations", "success": False})
-                                continue
-
-                    result = await self.tool_registry.execute_tool(
-                        "file_operations", user_id="ai_engine", **args
-                    )
-                    if result.success:
-                        operation = args.get("operation")
-                        file_path = args.get("file_path")
-
-                        if operation == "read_file" or operation == "read_file_lines":
-                            content = (
-                                result.data.get("content", "")
-                                if isinstance(result.data, dict)
-                                else str(result.data)
-                            )
-                            # Truncate very long content for display
-                            display_content = content
-                            if len(content) > 5000:
-                                display_content = (
-                                    content[:5000]
-                                    + f"\n...[{len(content) - 5000} more characters truncated]"
-                                )
-
-                            # Add line info for read_file_lines
-                            line_info = ""
-                            if operation == "read_file_lines" and isinstance(
-                                result.data, dict
-                            ):
-                                start = result.data.get("start_line", 1)
-                                end = result.data.get("end_line", 1)
-                                total = result.data.get("total_lines", 0)
-                                line_info = f" (lines {start}-{end} of {total})"
-
-                            # Prepare content for the tool box
-                            box_content = [
-                                f"Operation: {operation}{line_info}",
-                                f"File:      {file_path}",
-                            ]
-
-                            # Add content preview to the box
-                            if display_content.strip():
-                                box_content.append("")
-                                box_content.append("Content Preview:")
-                                # Add content lines to the box, truncating long lines
-                                content_lines = display_content.split("\n")[
-                                    :10
-                                ]  # Limit lines
-                                for line in content_lines:
-                                    # Truncate long lines to fit the box width (65 chars - padding)
-                                    truncated_line = line[:57]
-                                    box_content.append(truncated_line)
-                                if len(display_content.split("\n")) > 10:
-                                    box_content.append("...")
-
-                            box = self._format_tool_box(
-                                "TOOL: file_operations", box_content
-                            )
-                            yield box
-                            tool_results.append(
-                                {
-                                    "type": "file_read",
-                                    "file_path": file_path,
-                                    "content": content,
-                                    "success": True,
-                                }
-                            )
-                        else:
-                            # Other file operations (write, create, etc.)
-                            box_content = [
-                                f"Operation: {operation}",
-                                f"File:      {file_path}",
-                            ]
-                            box = self._format_tool_box(
-                                "TOOL: file_operations", box_content
-                            )
-                            yield box
-                            tool_results.append(
-                                {
-                                    "type": "file_op",
-                                    "operation": operation,
-                                    "file_path": file_path,
-                                    "success": True,
-                                }
-                            )
-                    else:
-                        yield f"\n**ERROR:** File Error: {result.error}\n"
-                        tool_results.append(
-                            {"type": "error", "error": result.error, "success": False}
-                        )
-
-                elif tool_name == "web_search":
-                    operation = args.get("operation", "search_web")
-                    result = await self.tool_registry.execute_tool(
-                        "web_search", user_id="ai_engine", **args
-                    )
-
-                    if result.success:
-                        # Format the result based on operation type
-                        if operation == "search_web":
-                            query = args.get("query", "unknown")
-                            search_results = result.data if result.data else []
-                            result_text = f"\n**SUCCESS:** Tool Used: web_search\n**Query:** {query}\n\n**Search Results:**\n"
-                            for idx, item in enumerate(search_results[:5], 1):
-                                result_text += (
-                                    f"\n{idx}. **{item.get('title', 'No title')}**\n"
-                                )
-                                result_text += (
-                                    f"   {item.get('snippet', 'No description')}\n"
-                                )
-                                result_text += f"   🔗 {item.get('url', 'No URL')}\n"
-
-                            yield result_text
-                            tool_results.append(
-                                {
-                                    "type": "web_search",
-                                    "query": query,
-                                    "results": search_results,
-                                    "success": True,
-                                }
-                            )
-
-                        elif operation == "fetch_url_content":
-                            url = args.get("url", "unknown")
-                            content_data = result.data if result.data else {}
-                            title = content_data.get("title", "No title")
-                            content = content_data.get("content", "No content")
-                            content_type = content_data.get("content_type", "text")
-
-                            # Truncate content if too long for display
-                            display_content = content
-                            max_display = 2000
-                            if len(content) > max_display:
-                                display_content = (
-                                    content[:max_display]
-                                    + f"\n\n... (truncated, total length: {len(content)} characters)"
-                                )
-
-                            result_text = f"\n**SUCCESS:** Tool Used: web_search (fetch_url_content)\n"
-                            result_text += f"**URL:** {url}\n"
-                            result_text += f"**Title:** {title}\n"
-                            result_text += f"**Content Type:** {content_type}\n\n"
-                            result_text += (
-                                f"**Content:**\n```\n{display_content}\n```\n"
-                            )
-
-                            yield result_text
-                            tool_results.append(
-                                {
-                                    "type": "web_fetch",
-                                    "url": url,
-                                    "content": content,
-                                    "success": True,
-                                }
-                            )
-
-                        elif operation == "parse_documentation":
-                            url = args.get("url", "unknown")
-                            doc_data = result.data if result.data else {}
-                            result_text = f"\n**SUCCESS:** Tool Used: web_search (parse_documentation)\n"
-                            result_text += f"**URL:** {url}\n"
-                            result_text += (
-                                f"**Title:** {doc_data.get('title', 'No title')}\n"
-                            )
-                            result_text += (
-                                f"**Type:** {doc_data.get('doc_type', 'unknown')}\n\n"
-                            )
-
-                            sections = doc_data.get("sections", [])
-                            if sections:
-                                result_text += "**Sections:**\n"
-                                for section in sections[:5]:
-                                    result_text += (
-                                        f"\n• {section.get('title', 'Untitled')}\n"
-                                    )
-
-                            yield result_text
-                            tool_results.append(
-                                {
-                                    "type": "web_docs",
-                                    "url": url,
-                                    "doc_data": doc_data,
-                                    "success": True,
-                                }
-                            )
-
-                        elif operation == "get_api_docs":
-                            api_name = args.get("api_name", "unknown")
-                            api_data = result.data if result.data else {}
-                            if api_data.get("found", True):
-                                result_text = f"\n**SUCCESS:** Tool Used: web_search (get_api_docs)\n"
-                                result_text += f"**API:** {api_name}\n"
-                                result_text += f"**Title:** {api_data.get('title', 'API Documentation')}\n"
-                            else:
-                                result_text = f"\n**WARNING:** Tool Used: web_search (get_api_docs)\n"
-                                result_text += f"**API:** {api_name}\n"
-                                result_text += f"**ERROR:** {api_data.get('message', 'Documentation not found')}\n"
-
-                            yield result_text
-                            tool_results.append(
-                                {
-                                    "type": "web_api_docs",
-                                    "api_name": api_name,
-                                    "api_data": api_data,
-                                    "success": True,
-                                }
-                            )
-                        else:
-                            display_msg = (
-                                f"\n**SUCCESS:** Tool Used: web_search ({operation})\n"
-                            )
-                            yield display_msg
-                            tool_results.append(
-                                {
-                                    "type": "web_search",
-                                    "operation": operation,
-                                    "success": True,
-                                }
-                            )
-                    else:
-                        error_msg = f"\n**ERROR:** Web Search Error: {result.error}\n"
-                        yield error_msg
-                        tool_results.append(
-                            {"type": "error", "error": result.error, "success": False}
-                        )
-
-            except json.JSONDecodeError as e:
-                error_msg = f"\n**ERROR:** JSON Parse Error: {str(e)}\n"
-                yield error_msg
-                tool_results.append(
-                    {"type": "error", "error": str(e), "success": False}
-                )
-            except Exception as e:
-                error_msg = f"\n**ERROR:** Tool Error: {str(e)}\n"
-                yield error_msg
-                tool_results.append(
-                    {"type": "error", "error": str(e), "success": False}
-                )
-
-        # Tool results have already been yielded immediately during execution
-        # Now check if we should continue or end
-
-        # Check if we should end the response (end_response tool was called)
-        if should_end_response:
-            return
-
-        # Use auto-continuation manager to determine if we should continue
-        if (
-            has_executed_tools
-            and self.auto_continuation.should_continue(
-                tool_results, should_end_response
-            )
-            and recursion_depth < MAX_RECURSION_DEPTH
-        ):
-            # Show continuation indicator
-            yield "... \n"
-
-            # Generate continuation response using auto-continuation manager
-            final_response = await self.auto_continuation.generate_continuation(
-                ai_provider=ai_provider,
-                messages=messages,
-                tool_results=tool_results,
-                model=model,
-                config=config,
-            )
-
-            # Clean model-specific syntax from continuation response
-            final_response = self._clean_model_syntax(final_response)
-
-            # Check if continuation response contains tool calls
-            if self._contains_tool_calls(final_response):
-                # Extract and yield any text before the first tool call
-                tool_call_start = final_response.find("```json")
-                if tool_call_start > 0:
-                    text_before_tools = final_response[:tool_call_start].strip()
-                    if text_before_tools:
-                        yield f"\n{text_before_tools}\n"
-
-                # Recursively process the continuation response with tools
-                async for chunk in self._process_response_with_tools(
-                    final_response,
-                    project_path,
-                    messages,
-                    ai_provider,
-                    model,
-                    config,
-                    confirmation_manager,
-                    recursion_depth + 1,
-                ):
-                    yield chunk
-            else:
-                # No tool calls in continuation, just yield the response
-                yield f"\n{final_response}"
+        if isinstance(response, dict):
+            text_content = response.get("content", "") or ""
+            final_tool_calls = response.get("tool_calls", [])
         else:
-            # No tools, just yield the original response
-            yield response
+            # Fallback for string response (manual JSON blocks)
+            text_content = response
+            # Find JSON tool calls in the response (standard format)
+            json_pattern = r"```json\s*\n(.*?)\n```"
+            matches = re.findall(json_pattern, response, re.DOTALL)
+            
+            # Use alternative format tool calls as fallback
+            alt_tool_calls = self._parse_alternative_tool_calls(response)
+            
+            # Combine standard JSON matches and alternative format tool calls
+            for match in matches:
+                try:
+                    tc = json.loads(match.strip())
+                    final_tool_calls.append({
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("tool_code"),
+                            "arguments": json.dumps(tc.get("args", {}))
+                        }
+                    })
+                except:
+                    continue
+            
+            for tc in alt_tool_calls:
+                final_tool_calls.append({
+                    "type": "function",
+                    "function": {
+                        "name": tc.get("tool_code"),
+                        "arguments": json.dumps(tc.get("args", {}))
+                    }
+                })
+
+        # Yield any text content first
+        if text_content.strip():
+            yield text_content + "\n"
+
+        if not final_tool_calls:
+            return
+
+        # Prepare tool results and history
+        tool_results = []
+        
+        # Add assistant message to history before executing tools
+        assistant_msg = {"role": "assistant", "content": text_content}
+        if isinstance(response, dict) and "tool_calls" in response:
+            assistant_msg["tool_calls"] = response["tool_calls"]
+        messages.append(assistant_msg)
+
+        # Execute detected tool calls
+        for tc in final_tool_calls:
+            func = tc.get("function", {})
+            tool_name = func.get("name")
+            try:
+                args = json.loads(func.get("arguments", "{}"))
+            except:
+                args = {}
+
+            # Execute and show in UI
+            async for tool_ui_output in self._execute_single_tool_live(
+                {"tool_code": tool_name, "args": args}, 
+                project_path, 
+                tool_results, 
+                confirmation_manager
+            ):
+                yield tool_ui_output
+            
+            # Add tool result to message history for AI's next turn
+            last_result = tool_results[-1] if tool_results else {"success": False, "error": "Unknown error"}
+            
+            messages.append({
+                "role": "tool",
+                "name": tool_name,
+                "tool_call_id": tc.get("id", tool_name),
+                "content": json.dumps(last_result)
+            })
+
+        # Check for end_response tool
+        has_end_response = any(
+            r.get("type") == "control" and r.get("message") == "end_response"
+            for r in tool_results
+        )
+
+        if has_end_response:
+            return
+
+        # RECURSIVE CONTINUATION
+        # Get next response from AI provider
+        tools = self.get_all_tool_schemas()
+        
+        next_response = await ai_provider.generate_response(
+            messages=messages,
+            model=model,
+            tools=tools,
+            max_tokens=config.get("max_tokens", 4096) or 16384,
+            temperature=config.get("temperature", 0.7),
+        )
+
+        # Process next response recursively
+        async for chunk in self._process_response_with_tools(
+            next_response,
+            project_path,
+            messages,
+            ai_provider,
+            model,
+            config,
+            confirmation_manager,
+            recursion_depth + 1
+        ):
+            yield chunk
+
+    def _execute_tools(self, response: Any, project_path: str):
+        """Compatibility wrapper for non-async or legacy calls"""
+        return response
 
     async def _process_tool_calls_stream(
         self, response_text: str, project_path: str = None
     ):
-        """Process tool calls from response text and yield results"""
-        import re
+        """Legacy tool call processor (stream)"""
+        return
 
-        # Find all JSON blocks in the response
-        json_pattern = r"```json\s*\n(.*?)\n```"
-        matches = re.findall(json_pattern, response_text, re.DOTALL)
-
-        for match in matches:
-            try:
-                tool_call = json.loads(match.strip())
-                tool_name = tool_call.get("tool_code")
-                args = tool_call.get("args", {})
-
-                if tool_name == "command_runner":
-                    # Handle command runner
-                    cmd_args = args.copy()
-                    if "operation" not in cmd_args:
-                        cmd_args["operation"] = "run_command"
-                    if "cwd" not in cmd_args:
-                        cmd_args["cwd"] = project_path or "."
-
-                    result = await self.tool_registry.execute_tool(
-                        "command_runner", user_id="ai_engine", **cmd_args
-                    )
-                    if result.success:
-                        command = args.get("command", "unknown")
-                        output = (
-                            result.data.get("stdout", "")
-                            if isinstance(result.data, dict)
-                            else str(result.data)
-                        )
-                        yield f"\n**SUCCESS:** Tool Used: command_runner\n**Command:** {command}\n**Output:**\n```\n{output}\n```\n"
-                    else:
-                        yield f"\n**ERROR:** Command Error: {result.error}\n"
-
-                elif tool_name == "file_operations":
-                    # Handle file operations
-                    operation = args.get("operation")
-                    file_path = args.get("file_path")
-
-                    # Prepend project_path to relative file paths
-                    if file_path and project_path:
-                        from pathlib import Path
-
-                        path = Path(file_path)
-                        if not path.is_absolute():
-                            args["file_path"] = str(Path(project_path) / file_path)
-                            file_path = args["file_path"]
-
-                    result = await self.tool_registry.execute_tool(
-                        "file_operations", user_id="ai_engine", **args
-                    )
-                    if result.success:
-                        if operation == "read_file":
-                            content = (
-                                result.data.get("content", "")
-                                if isinstance(result.data, dict)
-                                else str(result.data)
-                            )
-                            # Truncate very long content for display
-                            display_content = content
-                            if len(content) > 5000:
-                                display_content = (
-                                    content[:5000]
-                                    + f"\n...[{len(content) - 5000} more characters truncated]"
-                                )
-
-                            # Prepare content for the tool box
-                            box_content = [
-                                f"Operation: {operation}",
-                                f"File:      {file_path}",
-                            ]
-
-                            # Add content preview to the box
-                            if display_content.strip():
-                                box_content.append("")
-                                box_content.append("Content Preview:")
-                                # Add content lines to the box, truncating long lines
-                                content_lines = display_content.split("\n")[
-                                    :10
-                                ]  # Limit lines
-                                for line in content_lines:
-                                    # Truncate long lines to fit the box width (65 chars - padding)
-                                    truncated_line = line[:57]
-                                    box_content.append(truncated_line)
-                                if len(display_content.split("\n")) > 10:
-                                    box_content.append("...")
-
-                            box = self._format_tool_box(
-                                "TOOL: file_operations", box_content
-                            )
-                            yield box
-                        else:
-                            yield f"\n**SUCCESS:** Tool Used: file_operations\n**Operation:** {operation} on {file_path}\n"
-                    else:
-                        yield f"\n**ERROR:** File Error: {result.error}\n"
-
-            except json.JSONDecodeError as e:
-                yield f"\n**ERROR:** JSON Parse Error: {str(e)}\n"
-            except Exception as e:
-                yield f"\n**ERROR:** Tool Error: {str(e)}\n"
 
     def _build_system_prompt(self, project_path: str = None) -> str:
         """Build system prompt for the AI"""

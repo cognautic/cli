@@ -21,7 +21,7 @@ requirements = [
 extras_require = {
     "openai": ["openai>=1.0.0"],
     "anthropic": ["anthropic>=0.7.0"],
-    "google": ["google-generativeai>=0.3.0"],
+    "google": ["google-genai>=0.1.0"],
     "together": ["together>=0.2.0"],
     "git": ["gitpython>=3.1.0"],
     "dev": [
@@ -33,7 +33,7 @@ extras_require = {
     "all": [
         "openai>=1.0.0",
         "anthropic>=0.7.0",
-        "google-generativeai>=0.3.0",
+        "google-genai>=0.1.0",
         "together>=0.2.0",
         "gitpython>=3.1.0",
     ]
@@ -41,7 +41,7 @@ extras_require = {
 
 setup(
     name="cognautic-cli",
-    version="1.2.3-1",
+    version="1.2.4",
     author="Cognautic",
     author_email="cognautic@gmail.com",
     description="A Python-based CLI AI coding agent that provides agentic development capabilities with multi-provider AI support and real-time interaction",

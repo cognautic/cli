@@ -216,3 +216,51 @@ class FileReaderTool(BaseTool):
             
         except Exception as e:
             raise Exception(f"Failed to list directory: {str(e)}")
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "file_reader",
+                "description": "Read file contents and search in files. Use 'file_operations' for most file tasks instead.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "description": "The operation to perform",
+                            "enum": ["read_file", "grep_search", "list_directory"]
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file to read (required for read_file)"
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Regex pattern to search for (required for grep_search)"
+                        },
+                        "search_path": {
+                            "type": "string",
+                            "description": "Directory path to search in (required for grep_search)"
+                        },
+                        "directory_path": {
+                            "type": "string",
+                            "description": "Path to the directory to list (required for list_directory)"
+                        },
+                        "start_line": {
+                            "type": "integer",
+                            "description": "First line to read (1-indexed)"
+                        },
+                        "end_line": {
+                            "type": "integer",
+                            "description": "Last line to read (inclusive)"
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "Whether to search/list recursively"
+                        }
+                    },
+                    "required": ["operation"]
+                }
+            }
+        }

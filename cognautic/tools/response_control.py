@@ -22,6 +22,30 @@ class ResponseControlTool(BaseTool):
             "continue_response"
         ]
     
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "response_control",
+                "description": "Control when AI response should end (stops auto-continuation)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "description": "The operation to perform",
+                            "enum": self.get_capabilities()
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Final message or reason for ending/continuing"
+                        }
+                    },
+                    "required": ["operation"]
+                }
+            }
+        }
+    
     async def execute(self, operation: str, **kwargs) -> ToolResult:
         """Execute response control operation"""
         

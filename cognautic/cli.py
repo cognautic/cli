@@ -895,7 +895,8 @@ def chat(provider, model, project_path, websocket_port, session):
                                 model=current_model,
                                 project_path=current_workspace,
                                 conversation_history=conversation_history,
-                                confirmation_manager=confirmation_manager
+                                confirmation_manager=confirmation_manager,
+                                memory_manager=memory_manager
                             ):
                                 # Display chunks immediately with minimal overhead
                                 sys.stdout.write(chunk)
@@ -908,9 +909,9 @@ def chat(provider, model, project_path, websocket_port, session):
                         console.print()  # New line after streaming
                         console.print("[bold magenta]─[/bold magenta]" * 50)  # Border after AI response
                     
-                    # Add AI response to memory
-                    if full_response:
-                        memory_manager.add_message("assistant", full_response)
+                    # AI response is now automatically added to memory by process_message_stream
+                    # because it handles intermediate tool turns and signatures more accurately.
+                    pass
                     
                 except KeyboardInterrupt:
                     # Ctrl+C pressed while waiting for user input

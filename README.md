@@ -631,8 +631,9 @@ Cognautic CLI is a Python-based command-line interface that brings AI-powered de
 - **Secure Configuration**: Encrypted API key storage and permission management
 - **Interactive CLI**: Rich terminal interface with progress indicators, colored output, and command history
 - **Terminal Mode**: Toggle between Chat and Terminal modes with `Shift+Tab` for seamless workflows
-- **Live Streaming with Tool Execution**: True real-time AI streaming and immediate tool execution during responses
-- **Smart Auto-Continuation**: Continues work automatically until `end_response` is called, reducing manual "continue" steps
+- **Native Tool Support**: Full integration with provider SDKs (including the new `google-genai` SDK) for stable, multi-turn tool calling with parallel execution support (NEW! 🛠️)
+- **Zero-Confirm Agentic Flow**: Recursive execution model that eliminates legacy "continue" prompts, allowing the AI to complete complex multi-step tasks autonomously (NEW! ⚡)
+- **Eager Tool Execution**: Real-time tool detection and execution during streaming for immediate feedback
 - **Background Commands**: Run long tasks in the background and manage them with `/ps` and `/ct <process_id>`
 - **Command Auto-Completion**: Tab-completion for slash commands with inline descriptions
 - **Safety Modes**: Confirmation prompts by default (Safe Mode) with quick toggle to YOLO mode via `/yolo` or `Ctrl+Y`

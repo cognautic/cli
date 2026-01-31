@@ -148,3 +148,34 @@ class AskQuestionTool(BaseTool):
                 success=False,
                 error=f"Failed to ask question: {str(e)}"
             )
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "ask_question",
+                "description": "Ask the user a clarifying question when confused or uncertain. Use this when you have multiple options and need user guidance.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The question to ask the user"
+                        },
+                        "option1": {
+                            "type": "string",
+                            "description": "First potential path or option"
+                        },
+                        "option2": {
+                            "type": "string",
+                            "description": "Second potential path or option"
+                        },
+                        "option3": {
+                            "type": "string",
+                            "description": "Optional third potential path or option"
+                        }
+                    },
+                    "required": ["question", "option1", "option2"]
+                }
+            }
+        }

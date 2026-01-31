@@ -30,8 +30,49 @@ class WebSearchTool(BaseTool):
             "get_api_docs"
         ]
     
-    async def execute(self, operation: str, **kwargs) -> ToolResult:
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for information and documentation",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "description": "The operation to perform",
+                            "enum": self.get_capabilities()
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "URL to fetch or parse"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "Number of results to return (default: 10)"
+                        },
+                        "extract_text": {
+                            "type": "boolean",
+                            "description": "Whether to extract plain text from HTML"
+                        },
+                        "api_name": {
+                            "type": "string",
+                            "description": "Name of the API to get documentation for"
+                        }
+                    },
+                    "required": ["operation"]
+                }
+            }
+        }
+    
+    async def execute(self, **kwargs) -> ToolResult:
         """Execute web search operation"""
+        operation = kwargs.pop('operation', None)
         
         operations = {
             'search_web': self._search_web,

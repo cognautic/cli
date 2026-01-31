@@ -111,6 +111,20 @@ class MemoryManager:
         
         return session_id
 
+    def _deserialize_data(self, obj: Any) -> Any:
+        """Deep convert JSON data back to original formats, handling base64 bytes"""
+        if isinstance(obj, dict):
+            return {k: self._deserialize_data(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._deserialize_data(i) for i in obj]
+        elif isinstance(obj, str) and obj.startswith("__bytes__:"):
+            import base64
+            try:
+                return base64.b64decode(obj[len("__bytes__:"):])
+            except:
+                return obj
+        return obj
+
     def load_session(self, session_id: str) -> bool:
         """Load an existing session
         
@@ -129,6 +143,9 @@ class MemoryManager:
         try:
             with open(session_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            
+            # Handle binary data restoration
+            data = self._deserialize_data(data)
             
             self.current_session = SessionInfo.from_dict(data['session_info'])
             self.current_messages = [Message.from_dict(msg) for msg in data['messages']]
@@ -187,17 +204,29 @@ class MemoryManager:
         
         return messages
 
-    def get_context_for_ai(self, limit: int = 10) -> List[Dict[str, str]]:
+    def get_context_for_ai(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get conversation context formatted for AI consumption
         
         Args:
             limit: Maximum number of recent messages to include
         
         Returns:
-            List of message dictionaries with role and content
+            List of message dictionaries with all necessary fields
         """
         messages = self.get_conversation_history(limit)
-        return [{"role": msg.role, "content": msg.content} for msg in messages]
+        context = []
+        for msg in messages:
+            m = {"role": msg.role, "content": msg.content}
+            
+            # Include metadata fields if present (vital for tool calling)
+            if msg.metadata:
+                # Common fields for tool calling
+                for field in ["tool_calls", "name", "tool_call_id", "thought_signature"]:
+                    if field in msg.metadata:
+                        m[field] = msg.metadata[field]
+            
+            context.append(m)
+        return context
 
     def list_sessions(self) -> List[SessionInfo]:
         """List all available sessions
@@ -278,6 +307,18 @@ class MemoryManager:
         """
         return self.current_session
 
+    def _serialize_data(self, obj: Any) -> Any:
+        """Deep convert object to JSON-serializable format, handling bytes"""
+        if isinstance(obj, dict):
+            return {k: self._serialize_data(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._serialize_data(i) for i in obj]
+        elif isinstance(obj, bytes):
+            import base64
+            # Prefix with marker so we know to decode it later
+            return f"__bytes__:{base64.b64encode(obj).decode('utf-8')}"
+        return obj
+
     def _save_session(self):
         """Save current session to file with self-healing"""
         if not self.current_session or not self.session_file:
@@ -288,10 +329,13 @@ class MemoryManager:
             sessions_dir = Path(self.session_file).parent
             sessions_dir.mkdir(parents=True, exist_ok=True)
             
-            data = {
+            raw_data = {
                 'session_info': self.current_session.to_dict(),
                 'messages': [msg.to_dict() for msg in self.current_messages]
             }
+            
+            # Convert binary data to base64 for JSON serialization
+            data = self._serialize_data(raw_data)
             
             with open(self.session_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -336,10 +380,11 @@ class MemoryManager:
                 sessions_dir.mkdir(parents=True, exist_ok=True)
                 
                 # Try to save again
-                data = {
+                raw_data = {
                     'session_info': self.current_session.to_dict(),
                     'messages': [msg.to_dict() for msg in self.current_messages]
                 }
+                data = self._serialize_data(raw_data)
                 
                 with open(self.session_file, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)

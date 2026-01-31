@@ -49,11 +49,17 @@ class BaseTool(ABC):
         """Get list of capabilities this tool provides"""
         pass
     
+    @abstractmethod
+    def get_schema(self) -> Dict[str, Any]:
+        """Get the JSON schema for this tool (OpenAI compatible format)"""
+        pass
+    
     def get_info(self) -> Dict[str, Any]:
         """Get tool information"""
         return {
             'name': self.name,
             'description': self.description,
             'permission_level': self.permission_level.value,
-            'capabilities': self.get_capabilities()
+            'capabilities': self.get_capabilities(),
+            'schema': self.get_schema()
         }

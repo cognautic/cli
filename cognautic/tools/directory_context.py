@@ -338,3 +338,35 @@ class DirectoryContextTool(BaseTool):
             'has_tests': any((target_path / name).exists() for name in ['tests', 'test', '__tests__']),
             'has_docs': any((target_path / name).exists() for name in ['docs', 'documentation', 'doc'])
         }
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "directory_context",
+                "description": "Get information about current directory structure and contents. Provides tree views, summaries, and project analysis.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "description": "The operation to perform",
+                            "enum": ["get_current_directory", "list_directory_tree", "get_directory_summary", "get_file_types", "get_project_structure"]
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the directory (optional, defaults to current directory)"
+                        },
+                        "max_depth": {
+                            "type": "integer",
+                            "description": "Maximum depth for tree view (optional, default 3)"
+                        },
+                        "include_hidden": {
+                            "type": "boolean",
+                            "description": "Whether to include hidden files (optional, default false)"
+                        }
+                    },
+                    "required": ["operation"]
+                }
+            }
+        }

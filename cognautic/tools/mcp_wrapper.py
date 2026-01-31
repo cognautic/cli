@@ -111,6 +111,17 @@ class MCPToolWrapper(BaseTool):
                 error=f"MCP tool execution failed: {str(e)}"
             )
 
+    def get_schema(self) -> Dict[str, Any]:
+        """Get the JSON schema for this MCP tool"""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.input_schema
+            }
+        }
+
 
 def register_mcp_tools(tool_registry, mcp_manager):
     """

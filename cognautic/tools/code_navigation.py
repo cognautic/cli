@@ -640,3 +640,47 @@ class CodeNavigationTool(BaseTool):
         elif isinstance(node, ast.Attribute):
             return f"{self._get_name(node.value)}.{node.attr}"
         return str(node)
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "code_navigation",
+                "description": "Navigate code: jump to definition, find references, search symbols, and analyze structure. Use 'code_analysis' for deep analysis.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "description": "The operation to perform",
+                            "enum": ["jump_to_definition", "find_references", "search_symbols", "list_symbols", "find_implementations", "get_symbol_info"]
+                        },
+                        "symbol": {
+                            "type": "string",
+                            "description": "The symbol to navigate (required for jump_to_definition, find_references, get_symbol_info)"
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Search query for symbol search (required for search_symbols)"
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file to analyze (required for list_symbols, get_symbol_info)"
+                        },
+                        "workspace": {
+                            "type": "string",
+                            "description": "Base directory for operation (optional, defaults to current directory)"
+                        },
+                        "symbol_type": {
+                            "type": "string",
+                            "description": "Filter by symbol type (class, function, variable, etc.)"
+                        },
+                        "interface_or_class": {
+                            "type": "string",
+                            "description": "Interface or class name to find implementations for"
+                        }
+                    },
+                    "required": ["operation"]
+                }
+            }
+        }

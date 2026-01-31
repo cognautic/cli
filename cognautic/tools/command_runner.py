@@ -32,6 +32,42 @@ class CommandRunnerTool(BaseTool):
             "check_process_status"
         ]
     
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "command_runner",
+                "description": "Execute shell commands and system operations",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "description": "The operation to perform",
+                            "enum": self.get_capabilities()
+                        },
+                        "command": {
+                            "type": "string",
+                            "description": "The command to execute"
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Current working directory for the command"
+                        },
+                        "process_id": {
+                            "type": "string",
+                            "description": "Process ID for status/kill operations"
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Timeout in seconds (default: 300)"
+                        }
+                    },
+                    "required": ["operation"]
+                }
+            }
+        }
+    
     async def execute(self, operation: str, **kwargs) -> ToolResult:
         """Execute command operation"""
         

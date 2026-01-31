@@ -5,34 +5,24 @@ All notable changes to Cognautic CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.3-1] - 2025-12-12
+## [1.2.4] - 2026-01-31
 
 ### Added
-- **Ask Question Feature** (`/askq` command)
-  - AI can now proactively ask clarifying questions when confused or uncertain
-  - Toggle feature on/off with `/askq on` or `/askq off`
-  - AI provides 2-3 specific options plus automatic "Something else" for custom input
-  - Beautiful terminal UI with Rich panels for question display
-  - Mandatory scenarios where AI MUST ask questions:
-    - Framework/technology not specified
-    - Database/storage not specified
-    - Programming language ambiguous
-    - Multiple valid approaches exist
-    - Styling/UI framework not clear
-  - User's answer automatically injected as follow-up message to AI
-  - Seamless conversation flow without manual re-prompting
+- **Native Tool Support Improvements**
+  - Migrated Google provider to the new `google-genai` SDK for better performance and future-proofing.
+  - Implemented full support for Gemini `thought_signatures`, enabling stable parallel tool calls.
+  - Added binary data handling in the session memory system to securely persist tool call metadata.
 
 ### Fixed
-- Auto-continuation now properly handles ask_question tool results
-- User answers are automatically sent to AI as follow-up messages
-- AI now correctly uses custom answers provided by users
-- Added json import to fix tool execution error
-- Tool result structure properly includes answer data for continuation
+- **Gemini Stability Fixes**
+  - Resolved `400 Bad Request` errors related to tool turn order and missing signatures.
+  - Fixed `TypeError: Object of type bytes is not JSON serializable` during session saves.
+  - Corrected streaming issues where async iterators were not properly awaited.
 
 ### Changed
-- Enhanced system prompt with explicit mandatory scenarios for asking questions
-- Added detailed instructions on when and how AI should ask questions
-- Improved auto-continuation prompt builder to inject user answers
-- Updated help documentation to include `/askq` command
+- **Refined Agentic Workflow**
+  - **Removed Continue Prompts**: The CLI now uses a recursive execution model that handles multi-step tool sequences automatically without requiring manual "continue" confirmations.
+  - **Eager Tool Execution**: Tools detected during streaming are executed immediately to provide faster feedback and a smoother user experience.
+  - Updated dependencies to use `google-genai>=0.1.0`.
 
 ---

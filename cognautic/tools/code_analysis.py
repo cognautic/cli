@@ -31,6 +31,46 @@ class CodeAnalysisTool(BaseTool):
             "get_code_metrics"
         ]
     
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "code_analysis",
+                "description": "Analyze and understand code structure",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "description": "The operation to perform",
+                            "enum": self.get_capabilities()
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file to analyze"
+                        },
+                        "project_path": {
+                            "type": "string",
+                            "description": "Path to the project directory"
+                        },
+                        "function_name": {
+                            "type": "string",
+                            "description": "Name of the function to find"
+                        },
+                        "class_name": {
+                            "type": "string",
+                            "description": "Name of the class to find"
+                        },
+                        "include_methods": {
+                            "type": "boolean",
+                            "description": "Whether to include class methods in function search"
+                        }
+                    },
+                    "required": ["operation"]
+                }
+            }
+        }
+    
     async def execute(self, operation: str, **kwargs) -> ToolResult:
         """Execute code analysis operation"""
         

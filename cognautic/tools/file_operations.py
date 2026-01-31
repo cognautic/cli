@@ -36,6 +36,62 @@ class FileOperationsTool(BaseTool):
             "move_file"
         ]
     
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "file_operations",
+                "description": "Read, write, create, delete, and modify files and directories",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "description": "The operation to perform",
+                            "enum": self.get_capabilities()
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Content to write to the file"
+                        },
+                        "dir_path": {
+                            "type": "string",
+                            "description": "Path to the directory"
+                        },
+                        "start_line": {
+                            "type": "integer",
+                            "description": "Start line for partial read/write (1-indexed)"
+                        },
+                        "end_line": {
+                            "type": "integer",
+                            "description": "End line for partial read/write (1-indexed)"
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "Whether to perform operation recursively"
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Glob pattern for file search"
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "Source path for copy/move"
+                        },
+                        "destination": {
+                            "type": "string",
+                            "description": "Destination path for copy/move"
+                        }
+                    },
+                    "required": ["operation"]
+                }
+            }
+        }
+    
     async def execute(self, operation: str, **kwargs) -> ToolResult:
         """Execute file operation"""
         
