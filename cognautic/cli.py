@@ -23,6 +23,7 @@ from rich.columns import Columns
 import threading
 import queue
 from typing import Optional
+from .telemetry import TelemetryClient
 
 # Suppress verbose logging from Google AI and other libraries
 os.environ['GRPC_VERBOSITY'] = 'NONE'
@@ -233,6 +234,19 @@ class SlashCommandCompleter(Completer):
 @click.pass_context
 def main(ctx):
     """Cognautic CLI - AI-powered development assistant"""
+    # Initialize telemetry (now loads from .env internally)
+    from .telemetry import TelemetryClient
+    telemetry = TelemetryClient()
+    
+    if telemetry.enabled:
+        telemetry.track_event(
+            product='cli',
+            event='app_opened',
+            version=__cli_version__,
+            platform=sys.platform
+        )
+        ctx.obj = {'telemetry': telemetry}
+
     if ctx.invoked_subcommand is None:
         # No subcommand provided, start interactive chat
         ctx.invoke(chat)
@@ -263,6 +277,15 @@ def setup(provider, api_key, interactive):
 @click.option('--session', help='Session ID to continue')
 def chat(provider, model, project_path, websocket_port, session):
     """Start interactive chat session with AI agent"""
+    # Track command execution
+    telemetry = click.get_current_context().find_root().obj.get('telemetry') if click.get_current_context().find_root().obj else None
+    if telemetry:
+        telemetry.track_event(
+            product='cli',
+            event='command_executed',
+            meta={'command': 'chat'}
+        )
+    
     ascii_art = """
  ██████╗ ██████╗  ██████╗ ███╗   ██╗ █████╗ ██╗   ██╗████████╗██╗ ██████╗
 ██╔════╝██╔═══██╗██╔════╝ ████╗  ██║██╔══██╗██║   ██║╚══██╔══╝██║██╔════╝
