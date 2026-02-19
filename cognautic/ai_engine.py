@@ -648,7 +648,7 @@ class GoogleProvider(AIProvider):
                         if sig:
                             chunk_signature = sig
                             captured_signature = sig
-                            print(f"DEBUG: Captured signature from part: {str(sig)[:20]}...")
+                            #print(f"DEBUG: Captured signature from part: {str(sig)[:20]}...")
                             break
                         
                         # Use dict access if part is a dict (unlikely with this SDK but possible)
