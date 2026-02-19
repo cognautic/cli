@@ -4,6 +4,8 @@
 .env.production
 .env.development
 .env.test
+.env.example
+.env*
 
 # Build and distribution
 dist/
