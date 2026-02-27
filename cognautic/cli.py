@@ -8,6 +8,9 @@ import logging
 import os
 import readline
 import signal
+import select
+import termios
+import tty
 from pathlib import Path
 import sys
 import subprocess
@@ -117,6 +120,57 @@ from .repo_documenter import document_repository
 from .multi_agent import MultiAgentOrchestrator, AgentConfig
 
 console = Console()
+
+
+class EscKeyMonitor:
+    """Lightweight ESC key monitor for interrupting active AI streaming."""
+
+    def __init__(self):
+        self._fd = None
+        self._old_attrs = None
+        self._esc_pressed = False
+        self._active = False
+
+    def start(self):
+        if not sys.stdin.isatty():
+            return
+        try:
+            self._fd = sys.stdin.fileno()
+            self._old_attrs = termios.tcgetattr(self._fd)
+            tty.setcbreak(self._fd)
+            self._active = True
+            self._esc_pressed = False
+        except Exception:
+            self._active = False
+
+    def stop(self):
+        if not self._active:
+            return
+        try:
+            if self._fd is not None and self._old_attrs is not None:
+                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_attrs)
+        except Exception:
+            pass
+        finally:
+            self._active = False
+            self._fd = None
+            self._old_attrs = None
+
+    def poll(self):
+        if not self._active or self._fd is None:
+            return False
+        try:
+            while True:
+                ready, _, _ = select.select([self._fd], [], [], 0)
+                if not ready:
+                    break
+                char = os.read(self._fd, 1)
+                if char == b"\x1b":
+                    self._esc_pressed = True
+                    return True
+        except Exception:
+            return self._esc_pressed
+        return self._esc_pressed
 
 
 def _show_version(ctx, param, value):
@@ -402,6 +456,7 @@ def chat(provider, model, project_path, websocket_port, session):
         try:
             console.print("INFO: Type '/help' for commands, or press Ctrl+C twice to exit")
             console.print("INFO: Press Enter to send, Alt+Enter for new line")
+            console.print("INFO: Press Esc during AI output to stop the current response")
             console.print("INFO: Press Shift+Tab to toggle Terminal mode")
             if project_path:
                 console.print(f"DIR: Working in: {project_path}")
@@ -568,7 +623,7 @@ def chat(provider, model, project_path, websocket_port, session):
                 complete_while_typing=True  # Show completions as you type
             )
             
-            console.print("[dim]INFO: Press Shift+Tab to toggle between Chat and Terminal modes; Ctrl+G for voice input[/dim]\n")
+            console.print("[dim]INFO: Press Shift+Tab to toggle between Chat and Terminal modes; Ctrl+G for voice input; Esc to stop AI output[/dim]\n")
             
             while True:
                 try:
@@ -910,8 +965,10 @@ def chat(provider, model, project_path, websocket_port, session):
                         # Disable Ctrl+C during AI response
                         import signal
                         original_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+                        esc_monitor = EscKeyMonitor()
                         
                         try:
+                            esc_monitor.start()
                             async for chunk in ai_engine.process_message_stream(
                                 user_input, 
                                 provider=current_provider, 
@@ -925,7 +982,11 @@ def chat(provider, model, project_path, websocket_port, session):
                                 sys.stdout.write(chunk)
                                 sys.stdout.flush()
                                 full_response += chunk
+                                if esc_monitor.poll():
+                                    console.print("\n[dim]Response stopped (Esc pressed)[/dim]")
+                                    break
                         finally:
+                            esc_monitor.stop()
                             # Re-enable Ctrl+C after AI response
                             signal.signal(signal.SIGINT, original_handler)
                         
@@ -2300,6 +2361,7 @@ def show_help():
     help_text.append("• Press Enter - Send message\n", style="bold green")
     help_text.append("• Press Alt+Enter - New line (multi-line input)\n", style="bold green")
     help_text.append("• Press Tab - Auto-complete slash commands\n", style="bold green")
+    help_text.append("• Press Esc - Stop current AI response while it is streaming\n", style="bold green")
     help_text.append("• Press Ctrl+C twice - Exit CLI\n", style="bold yellow")
     help_text.append("• Press Shift+Tab - Toggle between Chat and Terminal modes\n", style="bold yellow")
     help_text.append("• Press Ctrl+Y - Toggle between Safe and YOLO modes\n", style="bold yellow")

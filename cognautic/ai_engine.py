@@ -362,7 +362,7 @@ class GoogleProvider(AIProvider):
                             
                             part = types.Part(
                                 function_call=types.FunctionCall(name=fn["name"], args=args),
-                                thought_signature=sig if (sig and i == 0) else None
+                                thought_signature=sig if sig else None
                             )
                             parts.append(part)
                         except Exception:
@@ -547,7 +547,7 @@ class GoogleProvider(AIProvider):
                         # Create Part WITHOUT silent try/except to expose errors
                         part = types.Part(
                             function_call=types.FunctionCall(name=fn["name"], args=args),
-                            thought_signature=sig if (sig and i == 0) else None
+                            thought_signature=sig if sig else None
                         )
                         parts.append(part)
                 else:
@@ -570,6 +570,42 @@ class GoogleProvider(AIProvider):
                 else:
                     final_contents.append(c)
             contents = final_contents
+
+            # Repair model turns with missing thought_signature on function_call parts.
+            # Gemini now requires signatures for replayed tool-calling turns.
+            for c in contents:
+                if c.role != "model":
+                    continue
+                fn_parts = [p for p in c.parts if getattr(p, "function_call", None)]
+                if not fn_parts:
+                    continue
+                turn_sig = None
+                for p in fn_parts:
+                    sig = getattr(p, "thought_signature", None)
+                    if sig:
+                        turn_sig = sig
+                        break
+                if turn_sig:
+                    for p in fn_parts:
+                        if not getattr(p, "thought_signature", None):
+                            p.thought_signature = turn_sig
+                else:
+                    # Historical entries may have no signature at all; degrade gracefully
+                    # by converting function calls to text so the request can proceed.
+                    repaired_parts = []
+                    for p in c.parts:
+                        fn_call = getattr(p, "function_call", None)
+                        if fn_call:
+                            fn_name = getattr(fn_call, "name", "unknown_tool")
+                            fn_args = getattr(fn_call, "args", {})
+                            repaired_parts.append(
+                                types.Part.from_text(
+                                    text=f"[Recovered tool call context: {fn_name} args={fn_args}]"
+                                )
+                            )
+                        else:
+                            repaired_parts.append(p)
+                    c.parts = repaired_parts
 
             # REPAIR: Fix orphan function responses to avoid 400 Errors (Self-Healing)
             for i, c in enumerate(contents):
@@ -604,7 +640,6 @@ class GoogleProvider(AIProvider):
                                 is_orphan = True
                     
                     if is_orphan:
-                        print(f"DEBUG: Repairing orphan function response at index {i} in history")
                         # Convert all function_response parts to text parts to save the session
                         new_parts = []
                         for p in c.parts:
@@ -619,6 +654,33 @@ class GoogleProvider(AIProvider):
                             else:
                                 new_parts.append(p)
                         c.parts = new_parts
+
+            # REPAIR: Gemini requires model function-call turns to directly follow user turns
+            # (either plain user text or aggregated function responses).
+            for i, c in enumerate(contents):
+                if c.role != "model":
+                    continue
+
+                has_fn_call = any(getattr(p, "function_call", None) for p in c.parts)
+                if not has_fn_call:
+                    continue
+
+                # Invalid if this function-call model turn is first, or follows another model turn.
+                if i == 0 or contents[i - 1].role != "user":
+                    repaired_parts = []
+                    for p in c.parts:
+                        fn_call = getattr(p, "function_call", None)
+                        if fn_call:
+                            fn_name = getattr(fn_call, "name", "unknown_tool")
+                            fn_args = getattr(fn_call, "args", {})
+                            repaired_parts.append(
+                                types.Part.from_text(
+                                    text=f"[Recovered out-of-order tool call context: {fn_name} args={fn_args}]"
+                                )
+                            )
+                        else:
+                            repaired_parts.append(p)
+                    c.parts = repaired_parts
 
             response_stream = await self.client.aio.models.generate_content_stream(
                 model=model,
@@ -687,11 +749,6 @@ class GoogleProvider(AIProvider):
                         elif captured_signature:
                             tc["thought_signature"] = captured_signature
                         
-                        if "thought_signature" in tc:
-                            print(f"DEBUG: Yielding tool {fn_call.name} with signature")
-                        else:
-                            print(f"DEBUG: Yielding tool {fn_call.name} WITHOUT signature")
-                            
                         yield {
                             "tool_calls": [tc]
                         }
