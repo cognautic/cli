@@ -6,7 +6,11 @@
 
 Join our Discord: [https://discord.gg/QrfpWDuZqd](https://discord.gg/QrfpWDuZqd)  
 Follow us on Instagram: [https://www.instagram.com/cognautic/](https://www.instagram.com/cognautic/)
-[![PyPI Downloads](https://static.pepy.tech/personalized-badge/cognautic-cli?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cognautic-cli)
+<p align="center">
+  <a href="https://pepy.tech/projects/cognautic-cli">
+    <img src="https://static.pepy.tech/personalized-badge/cognautic-cli?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads" alt="PyPI Downloads" width="520" />
+  </a>
+</p>
 
 ## Voice Input (NEW)
 
