@@ -323,5 +323,7 @@ class ConfigManager:
             console.print("\n[bold]Next steps:[/bold]")
             console.print("  • Start chatting: [cyan]cognautic chat[/cyan]")
             console.print("  • Get help: [cyan]cognautic --help[/cyan]")
+            console.print("  • Join our Discord: [cyan]https://discord.gg/QrfpWDuZqd[/cyan]")
+            console.print("  • Follow us on Instagram: [cyan]https://www.instagram.com/cognautic/[/cyan]")
         else:
             console.print("\n[yellow]No providers configured. Run /setup again when you're ready.[/yellow]")

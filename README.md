@@ -4,6 +4,9 @@
 
 ⚠️ **Under Development** - Some features may be unavailable
 
+Join our Discord: [https://discord.gg/QrfpWDuZqd](https://discord.gg/QrfpWDuZqd)  
+Follow us on Instagram: [https://www.instagram.com/cognautic/](https://www.instagram.com/cognautic/)
+
 ## Voice Input (NEW)
 
 Cognautic CLI supports one-shot speech-to-text to quickly prefill your prompt.

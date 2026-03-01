@@ -458,6 +458,7 @@ def chat(provider, model, project_path, websocket_port, session):
             console.print("INFO: Press Enter to send, Alt+Enter for new line")
             console.print("INFO: Press Esc during AI output to stop the current response")
             console.print("INFO: Press Shift+Tab to toggle Terminal mode")
+            console.print("INFO: Join our Discord https://discord.gg/QrfpWDuZqd and follow us on Instagram https://www.instagram.com/cognautic/")
             if project_path:
                 console.print(f"DIR: Working in: {project_path}")
             
@@ -2420,6 +2421,8 @@ def show_help():
     help_text.append("\n")
     help_text.append("CLI Commands (use outside chat):\n", style="bold cyan")
     help_text.append("• cognautic providers - List all AI providers and their API endpoints\n", style="cyan")
+    help_text.append("• Join our Discord: https://discord.gg/QrfpWDuZqd\n", style="cyan")
+    help_text.append("• Follow us on Instagram: https://www.instagram.com/cognautic/\n", style="cyan")
     help_text.append("\n• Any other text will be sent to the AI\n")
     
     console.print(Panel(help_text, title="Cognautic CLI Help", style="blue"))
