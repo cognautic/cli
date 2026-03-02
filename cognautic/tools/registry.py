@@ -47,7 +47,6 @@ class ToolRegistry:
         from .command_runner import CommandRunnerTool
         from .web_search import WebSearchTool
         from .code_analysis import CodeAnalysisTool
-        from .response_control import ResponseControlTool
         from .file_reader import FileReaderTool
         from .directory_context import DirectoryContextTool
         from .code_navigation import CodeNavigationTool
@@ -59,7 +58,6 @@ class ToolRegistry:
         self.register_tool(CommandRunnerTool())
         self.register_tool(WebSearchTool())
         self.register_tool(CodeAnalysisTool())
-        self.register_tool(ResponseControlTool())
         self.register_tool(FileReaderTool())
         self.register_tool(DirectoryContextTool())
         self.register_tool(CodeNavigationTool())

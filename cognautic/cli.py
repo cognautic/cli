@@ -18,6 +18,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -311,7 +312,7 @@ def main(ctx):
 @click.option('--interactive', is_flag=True, help='Interactive setup mode')
 def setup(provider, api_key, interactive):
     """Initialize Cognautic CLI and configure API keys"""
-    console.print(Panel.fit("🚀 Cognautic CLI Setup", style="bold blue"))
+    console.print("Cognautic CLI Setup", style="bold")
     
     config_manager = ConfigManager()
     
@@ -340,15 +341,7 @@ def chat(provider, model, project_path, websocket_port, session):
             meta={'command': 'chat'}
         )
     
-    ascii_art = """
- ██████╗ ██████╗  ██████╗ ███╗   ██╗ █████╗ ██╗   ██╗████████╗██╗ ██████╗
-██╔════╝██╔═══██╗██╔════╝ ████╗  ██║██╔══██╗██║   ██║╚══██╔══╝██║██╔════╝
-██║     ██║   ██║██║  ███╗██╔██╗ ██║███████║██║   ██║   ██║   ██║██║     
-██║     ██║   ██║██║   ██║██║╚██╗██║██╔══██║██║   ██║   ██║   ██║██║     
-╚██████╗╚██████╔╝╚██████╔╝██║ ╚████║██║  ██║╚██████╔╝   ██║   ██║╚██████╗
- ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═╝ ╚═════╝
-"""
-    console.print(ascii_art, style="bold green")
+    console.print("Cognautic CLI", style="bold")
     
     # Handle Sentinel objects from Click
     if not isinstance(provider, str):
@@ -454,11 +447,12 @@ def chat(provider, model, project_path, websocket_port, session):
         last_ctrl_c_time = [0]  # Use list to make it mutable in nested function
         
         try:
-            console.print("INFO: Type '/help' for commands, or press Ctrl+C twice to exit")
-            console.print("INFO: Press Enter to send, Alt+Enter for new line")
-            console.print("INFO: Press Esc during AI output to stop the current response")
-            console.print("INFO: Press Shift+Tab to toggle Terminal mode")
-            console.print("INFO: Join our Discord https://discord.gg/QrfpWDuZqd and follow us on Instagram https://www.instagram.com/cognautic/")
+            console.print("Type /help for commands. Press Ctrl+C twice to exit.")
+            console.print("Enter sends. Alt+Enter adds a new line. Esc stops streaming.")
+            social_text = Text()
+            social_text.append("Discord: https://discord.gg/QrfpWDuZqd\n")
+            social_text.append("Instagram: https://www.instagram.com/cognautic/")
+            console.print(Panel(social_text, title="Community", border_style="blue"))
             if project_path:
                 console.print(f"DIR: Working in: {project_path}")
             
@@ -617,11 +611,29 @@ def chat(provider, model, project_path, websocket_port, session):
             
             # Create prompt session with multi-line support and command completion
             command_completer = SlashCommandCompleter(current_workspace)
+            completion_style = Style.from_dict({
+                # Completion dropdown
+                "completion-menu": "fg:#ffffff bg:#000000",
+                "completion-menu.completion": "fg:#ffffff bg:#000000",
+                "completion-menu.completion.current": "fg:#ffffff bg:#000000 bold noreverse",
+                "completion-menu.meta.completion": "fg:#ffffff bg:#000000",
+                "completion-menu.meta.completion.current": "fg:#ffffff bg:#000000 bold noreverse",
+                "completion-menu.multi-column-meta": "fg:#ffffff bg:#000000",
+                # Fuzzy match highlight rules can override color; force white on black.
+                "completion-menu.completion fuzzymatch.outside": "fg:#ffffff bg:#000000",
+                "completion-menu.completion.current fuzzymatch.outside": "fg:#ffffff bg:#000000",
+                "completion-menu.completion fuzzymatch.inside": "fg:#ffffff bg:#000000 bold",
+                "completion-menu.completion.current fuzzymatch.inside": "fg:#ffffff bg:#000000 bold",
+                # Scrollbar
+                "scrollbar.background": "bg:#000000",
+                "scrollbar.button": "bg:#666666",
+            })
             session = PromptSession(
                 key_bindings=bindings,
                 multiline=True,  # Allow multi-line editing
                 completer=command_completer,
-                complete_while_typing=True  # Show completions as you type
+                complete_while_typing=True,  # Show completions as you type
+                style=completion_style,
             )
             
             console.print("[dim]INFO: Press Shift+Tab to toggle between Chat and Terminal modes; Ctrl+G for voice input; Esc to stop AI output[/dim]\n")
@@ -953,14 +965,17 @@ def chat(provider, model, project_path, websocket_port, session):
                             signal.signal(signal.SIGINT, original_handler)
                     else:
                         # Single model mode (original behavior)
-                        console.print(f"[dim]Processing with {current_provider}, model: {current_model or 'default'}...[/dim]")
+                        console.print("[bold magenta]─[/bold magenta]" * 50)
+                        console.print("[bold magenta]AI:[/bold magenta] ", end="")
+                        status = console.status(
+                            f"[dim]AI is working with {current_provider}, model: {current_model or 'default'}...[/dim]",
+                            spinner="dots",
+                        )
+                        status.start()
                         
                         # Get conversation history for context
                         conversation_history = memory_manager.get_context_for_ai(limit=10)
                         
-                        # Add border before AI response
-                        console.print("[bold magenta]─[/bold magenta]" * 50)
-                        console.print("[bold magenta]AI:[/bold magenta] ", end="")
                         full_response = ""
                         
                         # Disable Ctrl+C during AI response
@@ -987,6 +1002,7 @@ def chat(provider, model, project_path, websocket_port, session):
                                     console.print("\n[dim]Response stopped (Esc pressed)[/dim]")
                                     break
                         finally:
+                            status.stop()
                             esc_monitor.stop()
                             # Re-enable Ctrl+C after AI response
                             signal.signal(signal.SIGINT, original_handler)
@@ -1179,6 +1195,126 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
     """Handle slash commands in chat mode"""
     parts = command[1:].split()
     cmd = parts[0].lower() if parts else ""
+
+    async def interactive_config_menu():
+        """Interactive configuration menu for /config."""
+        from .provider_endpoints import get_all_providers, get_provider_config
+        session = PromptSession()
+
+        def render_all_providers():
+            all_providers = get_all_providers()
+            console.print("All supported providers:")
+            for provider_name in all_providers:
+                cfg = get_provider_config(provider_name)
+                if cfg.get("no_auth", False):
+                    status = "no key required"
+                else:
+                    status = "configured" if config_manager.has_api_key(provider_name) else "not configured"
+                console.print(f"- {provider_name}: {status}")
+
+        while True:
+            console.print("\n[bold]Configuration Menu[/bold]")
+            console.print("1. Set API key for provider")
+            console.print("2. View all config")
+            console.print("3. List all providers")
+            console.print("4. Get config value")
+            console.print("5. Set config value")
+            console.print("6. Delete config key")
+            console.print("7. Reset config to defaults")
+            console.print("8. Set custom_openai base URL")
+            console.print("9. Exit config menu")
+
+            try:
+                choice = (await session.prompt_async("Select option [1-9]: ")).strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("INFO: Exited config menu")
+                return
+
+            if choice == "1":
+                all_providers = get_all_providers()
+                key_providers = [p for p in all_providers if not get_provider_config(p).get("no_auth", False)]
+                console.print("Providers that accept API keys:")
+                for idx, provider_name in enumerate(key_providers, 1):
+                    configured = " (configured)" if config_manager.has_api_key(provider_name) else ""
+                    console.print(f"{idx}. {provider_name}{configured}")
+
+                provider_raw = (await session.prompt_async("Provider name or number: ")).strip()
+                if not provider_raw:
+                    console.print("ERROR: Provider is required", style="red")
+                    continue
+
+                provider = provider_raw.lower()
+                if provider_raw.isdigit():
+                    selected = int(provider_raw) - 1
+                    if 0 <= selected < len(key_providers):
+                        provider = key_providers[selected]
+                    else:
+                        console.print("ERROR: Invalid provider number", style="red")
+                        continue
+
+                if provider not in key_providers:
+                    console.print(f"ERROR: Unknown provider '{provider}'", style="red")
+                    continue
+
+                api_key = (await session.prompt_async(f"API key for {provider}: ", is_password=True)).strip()
+                if not api_key:
+                    console.print("INFO: API key update cancelled")
+                    continue
+
+                config_manager.set_api_key(provider, api_key)
+                console.print(f"SUCCESS: API key set for {provider}", style="green")
+            elif choice == "2":
+                console.print_json(data=config_manager.get_config())
+            elif choice == "3":
+                render_all_providers()
+            elif choice == "4":
+                key = (await session.prompt_async("Key: ")).strip()
+                if not key:
+                    console.print("ERROR: Key is required", style="red")
+                    continue
+                value = config_manager.get_config_value(key)
+                console.print(f"{key} = {value}")
+            elif choice == "5":
+                key = (await session.prompt_async("Key: ")).strip()
+                if not key:
+                    console.print("ERROR: Key is required", style="red")
+                    continue
+                value = await session.prompt_async("Value: ")
+                config_manager.set_config(key, value)
+                console.print(f"SUCCESS: Set {key} = {value}", style="green")
+            elif choice == "6":
+                key = (await session.prompt_async("Key to delete: ")).strip()
+                if not key:
+                    console.print("ERROR: Key is required", style="red")
+                    continue
+                config_manager.delete_config(key)
+                console.print(f"SUCCESS: Deleted {key}", style="green")
+            elif choice == "7":
+                confirm = (await session.prompt_async("Reset all config to defaults? [y/n]: ")).strip().lower()
+                if confirm in ("y", "yes"):
+                    config_manager.reset_config()
+                    console.print("SUCCESS: Configuration reset to defaults", style="green")
+                else:
+                    console.print("INFO: Reset cancelled")
+            elif choice == "8":
+                base_url = (await session.prompt_async("custom_openai base URL (e.g. https://api.example.com/v1): ")).strip()
+                if not base_url:
+                    console.print("ERROR: Base URL is required", style="red")
+                    continue
+                if not (base_url.startswith("http://") or base_url.startswith("https://")):
+                    console.print("ERROR: Base URL must start with http:// or https://", style="red")
+                    continue
+                config_manager.set_provider_endpoint("custom_openai", base_url)
+                try:
+                    ai_engine._initialize_providers()
+                except Exception:
+                    pass
+                console.print(f"SUCCESS: Set custom_openai base URL to {base_url}", style="green")
+            elif choice == "9":
+                console.print("INFO: Exited config menu")
+                return
+            else:
+                console.print("ERROR: Invalid option. Choose 1-9.", style="red")
     
     if cmd == "help":
         show_help()
@@ -1239,19 +1375,43 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
     
     elif cmd == "config":
         if len(parts) < 2:
-            console.print("Available config commands:")
-            console.print("• /config list - Show current configuration")
-            console.print("• /config providers - Show available providers")
-            console.print("• /config set <key> <value> - Set configuration value")
+            await interactive_config_menu()
         elif parts[1] == "list":
             config_data = config_manager.get_config()
             console.print_json(data=config_data)
         elif parts[1] == "providers":
-            providers = config_manager.list_providers()
-            console.print(f"Available providers: {', '.join(providers) if providers else 'None'}")
+            from .provider_endpoints import get_all_providers, get_provider_config
+            console.print("All supported providers:")
+            for provider_name in get_all_providers():
+                cfg = get_provider_config(provider_name)
+                if cfg.get("no_auth", False):
+                    status = "no key required"
+                else:
+                    status = "configured" if config_manager.has_api_key(provider_name) else "not configured"
+                console.print(f"- {provider_name}: {status}")
         elif parts[1] == "set" and len(parts) >= 4:
             config_manager.set_config(parts[2], parts[3])
             console.print(f"SUCCESS: Set {parts[2]} = {parts[3]}")
+        elif parts[1] == "api-key" and len(parts) >= 3:
+            provider = parts[2].lower()
+            session = PromptSession()
+            api_key = (await session.prompt_async(f"API key for {provider}: ", is_password=True)).strip()
+            if not api_key:
+                console.print("INFO: API key update cancelled")
+            else:
+                config_manager.set_api_key(provider, api_key)
+                console.print(f"SUCCESS: API key set for {provider}", style="green")
+        elif parts[1] == "get" and len(parts) >= 3:
+            value = config_manager.get_config_value(parts[2])
+            console.print(f"{parts[2]} = {value}")
+        elif parts[1] == "delete" and len(parts) >= 3:
+            config_manager.delete_config(parts[2])
+            console.print(f"SUCCESS: Deleted {parts[2]}", style="green")
+        elif parts[1] == "reset":
+            config_manager.reset_config()
+            console.print("SUCCESS: Configuration reset to defaults", style="green")
+        else:
+            console.print("ERROR: Invalid config action. Use /config for menu, or list/providers/get/set/api-key/delete/reset", style="red")
         return True
     
     elif cmd == "provider":
@@ -1296,6 +1456,18 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     console.print("ERROR: No local model configured", style="red")
                     console.print("INFO: Use /lmodel <path> to load a local model first", style="yellow")
             elif new_provider in ai_engine.providers or config_manager.has_api_key(new_provider):
+                # Ensure provider is initialized in current runtime after new key config.
+                if new_provider not in ai_engine.providers:
+                    try:
+                        ai_engine._initialize_providers()
+                    except Exception as e:
+                        console.print(f"ERROR: Failed to initialize provider {new_provider}: {e}", style="red")
+                        return True
+
+                if new_provider not in ai_engine.providers:
+                    console.print(f"ERROR: Provider {new_provider} is configured but failed to initialize", style="red")
+                    return True
+
                 context['provider'] = new_provider
                 current_provider = new_provider  # Update current provider
                 # Save the provider choice
@@ -1319,8 +1491,8 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
             console.print("ERROR: No provider selected", style="red")
             return True
         
-        # Check if user wants to list models (fetch from API)
-        if len(parts) >= 2 and parts[1] == "list":
+        # Fetch models for current provider when using /model or /model list
+        if len(parts) < 2 or (len(parts) >= 2 and parts[1] == "list"):
             console.print(f"INFO: Fetching available models from {current_provider}...")
             
             try:
@@ -1365,24 +1537,8 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     
                     return True
                 
-                # Fetch models from API
-                import nest_asyncio
-                
-                # Allow nested event loops
-                try:
-                    nest_asyncio.apply()
-                except:
-                    pass
-                
-                # Try to get models
-                try:
-                    result = asyncio.run(client.list_models())
-                except RuntimeError:
-                    # If we're in an event loop, use a workaround
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, client.list_models())
-                        result = future.result(timeout=10)
+                # Fetch models from API in the current async loop.
+                result = await client.list_models()
                 
                 if 'data' in result:
                     models = result['data']
@@ -1414,13 +1570,6 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 console.print(f"ERROR: Error fetching models: {str(e)}", style="red")
                 console.print(f"INFO: Check the provider's documentation for available models")
         
-        elif len(parts) < 2:
-            # Show current model and hint
-            current_model = context.get('model')
-            console.print(f"📌 Current model: {current_model or 'default'}")
-            console.print(f"📌 Provider: {current_provider}")
-            console.print(f"\nINFO: Use: /model list - to fetch available models from API")
-            console.print(f"INFO: Use: /model <model_name> - to switch model")
         else:
             # Switch to new model
             new_model = parts[1]
@@ -2371,7 +2520,8 @@ def show_help():
     help_text.append("• /help - Show this help message\n")
     help_text.append("• /workspace <path> or /ws <path> - Change working directory\n")
     help_text.append("• /setup - Run interactive setup wizard\n")
-    help_text.append("• /config [list|providers|set <key> <value>] - Manage configuration\n")
+    help_text.append("• /config - Open interactive configuration menu\n")
+    help_text.append("  - /config [list|providers|get|set|api-key|delete|reset] - Direct config actions\n", style="dim")
     help_text.append("• /provider [name] - Switch AI provider\n")
     help_text.append("• /model [model_id] - Switch AI model\n")
     help_text.append("• /model list or /models - Fetch available models from provider's API\n")
@@ -2425,7 +2575,8 @@ def show_help():
     help_text.append("• Follow us on Instagram: https://www.instagram.com/cognautic/\n", style="cyan")
     help_text.append("\n• Any other text will be sent to the AI\n")
     
-    console.print(Panel(help_text, title="Cognautic CLI Help", style="blue"))
+    console.print("Cognautic CLI Help", style="bold")
+    console.print(help_text)
 
 if __name__ == '__main__':
     main()

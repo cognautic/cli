@@ -224,6 +224,7 @@ class ConfigManager:
         
         providers = [
             ("openai", "OpenAI", "OPENAI_API_KEY", "https://platform.openai.com/api-keys"),
+            ("custom_openai", "Custom OpenAI-Compatible", "CUSTOM_OPENAI_API_KEY", "Your provider docs"),
             ("anthropic", "Anthropic", "ANTHROPIC_API_KEY", "https://console.anthropic.com/settings/keys"),
             ("google", "Google Gemini", "GOOGLE_API_KEY", "https://aistudio.google.com/app/apikey"),
             ("together", "Together AI", "TOGETHER_API_KEY", "https://api.together.xyz/settings/api-keys"),

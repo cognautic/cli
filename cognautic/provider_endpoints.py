@@ -71,6 +71,18 @@ PROVIDER_ENDPOINTS = {
             "X-Title": "Cognautic CLI"
         }
     },
+
+    # Generic OpenAI-compatible provider.
+    # Configure base URL with /endpoint after selecting this provider.
+    "custom_openai": {
+        "base_url": "https://api.openai.com/v1",
+        "chat_endpoint": "/chat/completions",
+        "models_endpoint": "/models",
+        "headers": {
+            "Authorization": "Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+    },
     
     "huggingface": {
         "base_url": "https://api-inference.huggingface.co",
@@ -454,6 +466,9 @@ PROVIDER_MODELS = {
         "google/gemini-pro-1.5",
         "meta-llama/llama-3.1-405b-instruct",
         "mistralai/mixtral-8x22b-instruct"
+    ],
+    "custom_openai": [
+        "gpt-4o-mini"
     ],
     "groq": [
         "llama-3.3-70b-versatile",

@@ -4,8 +4,6 @@ Confirmation handler for AI operations
 
 from rich.console import Console
 from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.formatted_text import HTML
 import asyncio
 
 console = Console()
@@ -16,22 +14,7 @@ class ConfirmationManager:
     
     def __init__(self):
         self.yolo_mode = False  # Default: require confirmation
-        self.session = None
-        self._setup_session()
-    
-    def _setup_session(self):
-        """Setup prompt session with key bindings"""
-        bindings = KeyBindings()
-        
-        @bindings.add('enter')
-        def confirm(event):
-            event.app.exit(result='confirm')
-        
-        @bindings.add('escape')
-        def cancel(event):
-            event.app.exit(result='cancel')
-        
-        self.session = PromptSession(key_bindings=bindings)
+        self.session = PromptSession()
     
     def toggle_yolo_mode(self):
         """Toggle YOLO mode on/off"""
@@ -110,21 +93,25 @@ class ConfirmationManager:
                 if key != "content":  # Don't show full content
                     console.print(f"  {key}: {value}")
         
-        # Show confirmation prompt
-        console.print("\n[bold green]Press ENTER to confirm[/bold green] or [bold red]ESC to cancel[/bold red]")
-        
-        try:
-            result = await self.session.prompt_async("")
-            
-            if result == 'confirm':
-                console.print("[green]SUCCESS: Confirmed[/green]")
-                return True
-            else:
+        # Strict y/n confirmation loop: block tool execution until explicit decision.
+        console.print("\n[bold green]Accept?[/bold green] Type [bold]y[/bold] to confirm or [bold]n[/bold] to reject.")
+
+        while True:
+            try:
+                user_input = await self.session.prompt_async("Confirm [y/n]: ")
+            except (KeyboardInterrupt, EOFError):
                 console.print("[red]CANCELLED: Operation cancelled[/red]")
                 return False
-        except (KeyboardInterrupt, EOFError):
-            console.print("[red]CANCELLED: Operation cancelled[/red]")
-            return False
+
+            answer = (user_input or "").strip().lower()
+            if answer in {"y", "yes"}:
+                console.print("[green]SUCCESS: Confirmed[/green]")
+                return True
+            if answer in {"n", "no"}:
+                console.print("[red]CANCELLED: Operation cancelled[/red]")
+                return False
+
+            console.print("[yellow]Please type 'y' or 'n'.[/yellow]")
     
     def display_mode_status(self):
         """Display current confirmation mode status"""

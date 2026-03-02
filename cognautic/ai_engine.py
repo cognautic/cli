@@ -1685,10 +1685,6 @@ class AIEngine:
                                             already_executed_calls.append((tc_name, tc_args_json))
                                             has_executed_tools = True
                                             
-                                            # Special handling: if it was response_control end_response,
-                                            # we might want to flag it here.
-                                            if tc_name == "response_control" and tc_args_dict.get("operation") == "end_response":
-                                                has_end_response = True
                                 except Exception as e:
                                     # If parsing/execution fails mid-stream, we'll let the final loop try again
                                     pass
@@ -1826,15 +1822,6 @@ class AIEngine:
                     
                     has_executed_tools = True
 
-                # Check if we should stop (e.g. response_control end_response)
-                has_end_response = any(
-                    r.get("type") == "control" and r.get("message") == "end_response"
-                    for r in tool_results
-                )
-
-                if has_end_response:
-                    return
-
                 # RECURSIVE CONTINUATION
                 # Remove manual continuation prompts entirely.
                 # Just call itself again with updated history.
@@ -1861,53 +1848,11 @@ class AIEngine:
             yield f"\n[Traceback]\n{traceback.format_exc()}\n"
 
     def _format_tool_box(self, title: str, content_lines: list, width: int = 65) -> str:
-        """Format a tool execution box with proper alignment"""
-        import re
-
-        # Top border
-        box = f"\n\n╔{'═' * (width - 2)}╗\n"
-        # Title - truncate if too long
-        if len(title) > width - 4:
-            title = title[: width - 7] + "..."
-        box += f"║ {title:<{width - 4}} ║\n"
-        # Separator if there's content
+        """Format tool output in plain text (no box)."""
+        lines = [f"{title}"]
         if content_lines:
-            box += f"╠{'═' * (width - 2)}╣\n"
-            # Content lines
-            for line in content_lines:
-                # Remove ANSI codes for length calculation
-                clean_line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-                display_len = len(clean_line)
-                # Truncate line if too long
-                if display_len > width - 4:
-                    # Keep ANSI codes but truncate visible text
-                    visible_len = 0
-                    truncated = ""
-                    in_ansi = False
-                    for char in line:
-                        if char == "\x1b":
-                            in_ansi = True
-                        if in_ansi:
-                            truncated += char
-                            if char == "m":
-                                in_ansi = False
-                        else:
-                            if visible_len < width - 7:
-                                truncated += char
-                                visible_len += 1
-                            elif visible_len == width - 7:
-                                truncated += "..."
-                                visible_len += 3
-                                break
-                    line = truncated
-                    clean_line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-                    display_len = len(clean_line)
-
-                padding = width - 4 - display_len
-                box += f"║ {line}{' ' * max(0, padding)} ║\n"
-        # Bottom border
-        box += f"╚{'═' * (width - 2)}╝\n\n"
-        return box
+            lines.extend(content_lines)
+        return "\n" + "\n".join(lines) + "\n"
 
     async def _execute_single_tool_live(
         self, tool_call: dict, project_path: str, tool_results: list, confirmation_manager = None
@@ -1919,15 +1864,6 @@ class AIEngine:
             tool_name = tool_call.get("tool_code")
             args = tool_call.get("args", {})
 
-            # Check for response control tool
-            if tool_name == "response_control":
-                operation = args.get("operation", "end_response")
-                if operation == "end_response":
-                    box = self._format_tool_box("Response Completed", [])
-                    yield box
-                    tool_results.append({"type": "control", "message": "end_response"})
-                return
-            
             # Check for ask_question tool - special handling
             if tool_name == "ask_question":
                 # Execute the ask_question tool
@@ -2138,15 +2074,15 @@ class AIEngine:
                         # Other operations (write, create, etc.)
                         content = [f"Operation: {operation}", f"File:      {file_path}"]
 
-                        # Show diff for write/edit operations inside the box
+                        # Show diff for content-changing operations
                         if isinstance(result.data, dict):
                             old_content = result.data.get("old_content")
                             new_content = result.data.get("new_content")
-                            if old_content is not None and new_content is not None:
+                            if new_content is not None and operation in ["write_file", "write_file_lines", "create_file"]:
                                 # Generate unified diff
                                 import difflib
 
-                                old_lines = old_content.splitlines(keepends=True)
+                                old_lines = (old_content or "").splitlines(keepends=True)
                                 new_lines = new_content.splitlines(keepends=True)
                                 diff = difflib.unified_diff(
                                     old_lines,
@@ -2402,9 +2338,6 @@ class AIEngine:
                         "command_operations" in channel or "file_operations" in channel
                     ):
                         tool_calls[i]["tool_code"] = "file_operations"
-                    elif "response_control" in channel:
-                        tool_calls[i]["tool_code"] = "response_control"
-
         return tool_calls
 
     def _clean_model_syntax(self, text: str) -> str:
@@ -2539,15 +2472,6 @@ class AIEngine:
                 "content": json.dumps(last_result)
             })
 
-        # Check for end_response tool
-        has_end_response = any(
-            r.get("type") == "control" and r.get("message") == "end_response"
-            for r in tool_results
-        )
-
-        if has_end_response:
-            return
-
         # RECURSIVE CONTINUATION
         # Get next response from AI provider
         tools = self.get_all_tool_schemas()
@@ -2629,14 +2553,13 @@ CRITICAL BEHAVIOR REQUIREMENTS:
 - PROVIDE COMPREHENSIVE SOLUTIONS: Don't stop after creating just one file - complete the entire functional project.
 - BE PROACTIVE: Anticipate what files and functionality are needed and create them all without asking for permission for each step.
 - EXPLORATION IS OPTIONAL: You may explore the workspace with 'ls' or 'pwd' if needed, but this is NOT required before creating new files. If the user asks you to BUILD or CREATE something, prioritize creating the files immediately.
-- ALWAYS USE end_response TOOL: When you have completed ALL tasks, you MUST call the end_response tool to signal completion. This prevents unnecessary auto-continuation.
 - AUTO-CONTINUATION: The system will automatically continue ONLY when:
   * You created files but haven't run necessary commands yet (e.g., npm install after creating package.json)
   * There were errors that need to be handled
-  * Otherwise, you MUST explicitly call end_response when done
+  * Otherwise, provide the completed result and stop
 - NEVER RE-READ SAME FILE: If a file was truncated in the output, use read_file_lines to read the specific truncated section, DO NOT re-read the entire file
 - Never you ever return a empty response
-- Use end response tool ONLY when the task is done
+- End your response only when the task is done
 
 WORKSPACE EXPLORATION RULES (CRITICAL - ALWAYS CHECK FIRST):
 - ALWAYS start by listing directory contents to see what files exist in the current directory
@@ -3022,26 +2945,26 @@ When user asks to ADD FEATURE to existing project (e.g., "add export button to c
 3. THIRD: Modify the appropriate files to add the feature
    - For SMALL changes (adding a section): Use write_file_lines to insert/modify only needed lines
    - For LARGE files: NEVER use write_file with entire content - use write_file_lines in sections
-4. FOURTH: Call end_response when done
+4. FOURTH: Provide the completed result
 5. DO NOT create new standalone files - modify existing ones!
 
 When user asks to BUILD NEW web interface from scratch:
 1. Immediately create ALL necessary files (index.html, style.css, script.js) with complete, working code
 2. Include ALL tool calls in your response
-3. Call end_response when done
+3. Provide the completed result
 
 When user asks to MODIFY a file (e.g., "make the UI black themed"):
 1. FIRST: Check if file exists by listing directory (if not already known)
 2. SECOND: Read the file to see current content
 3. THIRD: Write the modified version with requested changes
-4. FOURTH: Call end_response when done
+4. FOURTH: Provide the completed result
 5. Do NOT just describe what you see - MODIFY IT
 
 When user asks to READ/ANALYZE a file:
 1. First: List directory to see what files exist (use 'ls' on Linux/Mac or 'dir' on Windows)
 2. Then: If file exists, read it with file_operations
 3. Finally: Provide analysis based on actual file content
-4. Call end_response when done
+4. Provide the completed result
 
 When user asks to IMPLEMENT something requiring external/current information:
 1. FIRST: Use web_search to get latest documentation/information
@@ -3049,14 +2972,14 @@ When user asks to IMPLEMENT something requiring external/current information:
    - Example: "use TailwindCSS" → search for "TailwindCSS installation guide"
 2. SECOND: Review search results and fetch detailed content if needed
 3. THIRD: Create/modify files based on the researched information
-4. FOURTH: Call end_response when done
+4. FOURTH: Provide the completed result
 5. DO NOT guess API endpoints or library usage - ALWAYS search first!
 
 When user explicitly asks for RESEARCH:
 1. FIRST: Use web_search with appropriate query
 2. SECOND: Present search results to user
 3. THIRD: If user wants more details, fetch specific URLs
-4. FOURTH: Call end_response when done
+4. FOURTH: Provide the completed result
 
 The tools will execute automatically and show results. Keep explanatory text BRIEF.
 
@@ -3068,7 +2991,6 @@ Available tools:
         prompt += "- file_reader: Read files, grep search, list directories\n"
         prompt += "- command_runner: Execute shell commands (use run_async_command for long tasks)\n"
         prompt += "- web_search: Search the web for information\n"
-        prompt += "- response_control: Use end_response when task is complete\n"
         prompt += "- directory_context: Get detailed directory structure and project information\n"
         prompt += "- code_navigation: Jump to definition, find references, search symbols in code\n"
         
@@ -3200,39 +3122,10 @@ REMEMBER: Ask questions EARLY before starting implementation, not after!
 """
         
         prompt += """
-RESPONSE CONTINUATION (CRITICAL - SYSTEM WILL AUTO-CONTINUE):
-- ⚠️ IMPORTANT: The system will AUTOMATICALLY continue your response after EVERY message
-- This means you will KEEP GETTING called until you explicitly call end_response
-- YOU MUST call end_response when you finish ALL work, or you'll loop forever:
-
-```json
-{
-  "tool_code": "response_control",
-  "args": {
-    "operation": "end_response"
-  }
-}
-```
-
-- HOW IT WORKS:
-  * You respond → System auto-continues → You respond again → System auto-continues → ...
-  * This loop ONLY stops when you call end_response
-  * If you say "I will use a tool" but don't execute it, system will auto-continue and remind you
-  * If you execute tools, system will auto-continue for next steps
-  * If you do nothing, system will still auto-continue
-
-- WHEN TO USE end_response (THE ONLY WAY TO STOP):
-  * ✅ After completing ALL requested work
-  * ✅ After providing final summary/instructions
-  * ✅ When task is 100% complete
-  * ❌ NEVER use it if task is incomplete - system will continue for you
-
-- CRITICAL: If you forget end_response, you'll keep getting called in an infinite loop!
-
 REMEMBER:
-1. Use tools to actually perform actions, don't just provide code examples!
-2. Complete ENTIRE requests in ONE response - create all necessary files and functionality!
-3. Don't stop after one file - build complete, functional projects!
+1. Use tools to actually perform actions, don't just provide code examples.
+2. Complete entire requests in one response.
+3. Don't stop after one file when the user asked for complete functionality.
 4. NEVER promise to do something without including the tool calls to actually do it!
 5. For very long file content, the system will automatically handle it - just provide the full content
 
@@ -3276,8 +3169,7 @@ When a user asks you to "build/create a [project type] app/project", you MUST co
 ⚠️ CRITICAL RULES:
 - DO NOT stop after creating source files - you MUST create package.json/requirements.txt!
 - DO NOT skip steps - complete the ENTIRE project setup!
-- DO NOT use end_response until ALL steps above are completed!
-- ALWAYS use end_response when done - NEVER leave the response hanging!
+- Complete all steps above before finishing your response.
 
 📋 EXAMPLE COMPLETE FLOW FOR REACT APP:
 1. Web search for React best practices and current versions
@@ -3287,9 +3179,9 @@ When a user asks you to "build/create a [project type] app/project", you MUST co
 5. Create src/index.css and component styles
 6. Create package.json with dependencies ← DON'T SKIP THIS!
 8. Provide instructions: npm install and npm start
-9. THEN use end_response
+9. Then provide the final response
 
-If you find yourself about to use end_response, ask yourself:
+Before finishing, ask yourself:
 - Did I create package.json/requirements.txt? If NO → CREATE IT NOW!
 - Did I run npm install / pip install? If NO → RUN IT NOW!
 - Is the project ready to run? If NO → COMPLETE THE SETUP!
