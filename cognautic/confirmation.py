@@ -4,7 +4,9 @@ Confirmation handler for AI operations
 
 from rich.console import Console
 from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 import asyncio
+from typing import Callable, Optional
 
 console = Console()
 
@@ -14,7 +16,16 @@ class ConfirmationManager:
     
     def __init__(self):
         self.yolo_mode = False  # Default: require confirmation
-        self.session = PromptSession()
+        bindings = KeyBindings()
+
+        @bindings.add("c-y")
+        def _toggle_yolo(event):
+            self.toggle_yolo_mode()
+            event.app.exit(result="__TOGGLE_YOLO__")
+
+        self.session = PromptSession(key_bindings=bindings)
+        self._on_prompt_start: Optional[Callable[[], None]] = None
+        self._on_prompt_end: Optional[Callable[[], None]] = None
     
     def toggle_yolo_mode(self):
         """Toggle YOLO mode on/off"""
@@ -28,6 +39,15 @@ class ConfirmationManager:
     def is_yolo_mode(self) -> bool:
         """Check if YOLO mode is enabled"""
         return self.yolo_mode
+
+    def set_prompt_hooks(
+        self,
+        on_prompt_start: Optional[Callable[[], None]] = None,
+        on_prompt_end: Optional[Callable[[], None]] = None,
+    ):
+        """Set callbacks to run around interactive confirmation prompts."""
+        self._on_prompt_start = on_prompt_start
+        self._on_prompt_end = on_prompt_end
     
     async def confirm_operation(self, operation_type: str, details: dict) -> bool:
         """
@@ -96,22 +116,34 @@ class ConfirmationManager:
         # Strict y/n confirmation loop: block tool execution until explicit decision.
         console.print("\n[bold green]Accept?[/bold green] Type [bold]y[/bold] to confirm or [bold]n[/bold] to reject.")
 
-        while True:
-            try:
-                user_input = await self.session.prompt_async("Confirm [y/n]: ")
-            except (KeyboardInterrupt, EOFError):
-                console.print("[red]CANCELLED: Operation cancelled[/red]")
-                return False
+        if self._on_prompt_start:
+            self._on_prompt_start()
+        try:
+            while True:
+                try:
+                    user_input = await self.session.prompt_async("Confirm [y/n]: ")
+                except (KeyboardInterrupt, EOFError):
+                    console.print("[red]CANCELLED: Operation cancelled[/red]")
+                    return False
 
-            answer = (user_input or "").strip().lower()
-            if answer in {"y", "yes"}:
-                console.print("[green]SUCCESS: Confirmed[/green]")
-                return True
-            if answer in {"n", "no"}:
-                console.print("[red]CANCELLED: Operation cancelled[/red]")
-                return False
+                answer = (user_input or "").strip().lower()
+                if user_input == "__TOGGLE_YOLO__":
+                    self.display_mode_status()
+                    if self.yolo_mode:
+                        console.print("[green]SUCCESS: Confirmed (YOLO mode enabled)[/green]")
+                        return True
+                    continue
+                if answer in {"y", "yes"}:
+                    console.print("[green]SUCCESS: Confirmed[/green]")
+                    return True
+                if answer in {"n", "no"}:
+                    console.print("[red]CANCELLED: Operation cancelled[/red]")
+                    return False
 
-            console.print("[yellow]Please type 'y' or 'n'.[/yellow]")
+                console.print("[yellow]Please type 'y' or 'n'.[/yellow]")
+        finally:
+            if self._on_prompt_end:
+                self._on_prompt_end()
     
     def display_mode_status(self):
         """Display current confirmation mode status"""

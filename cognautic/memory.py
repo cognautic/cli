@@ -57,20 +57,63 @@ class MemoryManager:
         """Initialize memory manager
         
         Args:
-            base_dir: Base directory for sessions. If None, uses current working directory
+            base_dir: Base directory for sessions. If None, uses internal CLI storage
+                      at ~/.cognautic
         """
         if base_dir:
             self.base_dir = Path(base_dir)
         else:
-            self.base_dir = Path.cwd()
+            self.base_dir = Path.home() / ".cognautic"
         
         self.sessions_dir = self.base_dir / ".sessions"
-        self.sessions_dir.mkdir(exist_ok=True)
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.session_index_file = self.base_dir / "sessions_index.json"
         
         # Current session state
         self.current_session: Optional[SessionInfo] = None
         self.current_messages: List[Message] = []
         self.session_file: Optional[Path] = None
+
+    def _load_session_index(self) -> Dict[str, Dict[str, Any]]:
+        """Load session-to-workspace index from internal storage."""
+        try:
+            if self.session_index_file.exists():
+                with open(self.session_index_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+        except Exception:
+            pass
+        return {}
+
+    def _save_session_index(self, index_data: Dict[str, Dict[str, Any]]):
+        """Persist session index atomically."""
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        tmp_file = self.session_index_file.with_suffix(".tmp")
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(index_data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp_file.replace(self.session_index_file)
+
+    def _update_session_index(self, session: SessionInfo):
+        """Upsert session metadata in internal index."""
+        index_data = self._load_session_index()
+        index_data[session.session_id] = {
+            "workspace": session.workspace,
+            "provider": session.provider,
+            "model": session.model,
+            "title": session.title,
+            "last_updated": session.last_updated,
+        }
+        self._save_session_index(index_data)
+
+    def _remove_from_session_index(self, session_id: str):
+        """Remove session metadata from internal index."""
+        index_data = self._load_session_index()
+        if session_id in index_data:
+            del index_data[session_id]
+            self._save_session_index(index_data)
 
     def create_session(self, provider: str, model: Optional[str] = None, 
                       workspace: Optional[str] = None, title: Optional[str] = None) -> str:
@@ -107,6 +150,7 @@ class MemoryManager:
         
         # Save initial session file
         self._save_session()
+        self._update_session_index(self.current_session)
         
         
         return session_id
@@ -150,6 +194,7 @@ class MemoryManager:
             self.current_session = SessionInfo.from_dict(data['session_info'])
             self.current_messages = [Message.from_dict(msg) for msg in data['messages']]
             self.session_file = session_file
+            self._update_session_index(self.current_session)
             
             console.print(f"✅ Loaded session: {session_id} - {self.current_session.title}", style="green")
             console.print(f"📊 Messages: {len(self.current_messages)}, Provider: {self.current_session.provider}")
@@ -190,6 +235,7 @@ class MemoryManager:
         
         # Save session after each message
         self._save_session()
+        self._update_session_index(self.current_session)
 
     def get_conversation_history(self, limit: Optional[int] = None) -> List[Message]:
         """Get conversation history for the current session
@@ -281,6 +327,7 @@ class MemoryManager:
                 self.current_session = None
                 self.current_messages = []
                 self.session_file = None
+            self._remove_from_session_index(session_id)
             
             console.print(f"✅ Deleted session: {session_id}", style="green")
             return True
@@ -305,6 +352,7 @@ class MemoryManager:
         
         self.current_session.last_updated = datetime.now().isoformat()
         self._save_session()
+        self._update_session_index(self.current_session)
 
     def get_current_session(self) -> Optional[SessionInfo]:
         """Get current session info

@@ -56,6 +56,38 @@ class GenericProvider(AIProvider):
         self.provider_name = provider_name
         self.client = GenericAPIClient(provider_name, api_key, base_url)
 
+    def _extract_text_from_content_blocks(self, blocks: Any) -> str:
+        """Extract text from providers that return content as block arrays."""
+        if not isinstance(blocks, list):
+            return ""
+        text_parts = []
+        for block in blocks:
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str) and text:
+                    text_parts.append(text)
+        return "".join(text_parts)
+
+    def _extract_openai_compatible_text(self, response: Dict[str, Any]) -> str:
+        """Extract text from OpenAI-compatible provider payloads."""
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return ""
+
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        message = first_choice.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return self._extract_text_from_content_blocks(content)
+
+        text = first_choice.get("text")
+        if isinstance(text, str):
+            return text
+        return ""
+
     async def generate_response(
         self, messages: List[Dict], model: str = None, **kwargs
     ) -> str:
@@ -73,13 +105,13 @@ class GenericProvider(AIProvider):
                                 full_text += part["text"]
                             elif "thought" in part:
                                 full_text += f"<thought>\n{part['thought']}\n</thought>\n"
-                        return full_text or "No response generated"
-                return "No response generated"
+                        return full_text
+                return response.get("text", "")
 
             elif self.provider_name == "anthropic":
                 if "content" in response and response["content"]:
-                    return response["content"][0]["text"]
-                return "No response generated"
+                    return self._extract_text_from_content_blocks(response["content"])
+                return response.get("completion", "") or response.get("text", "")
 
             elif self.provider_name == "ollama":
                 # Ollama returns { message: { content: ... } }
@@ -87,15 +119,13 @@ class GenericProvider(AIProvider):
                     msg = response.get("message") or {}
                     if isinstance(msg, dict):
                         content = msg.get("content")
-                        if content:
+                        if isinstance(content, str):
                             return content
-                return "No response generated"
+                return response.get("response", "") if isinstance(response, dict) else ""
 
             else:
                 # OpenAI-compatible format
-                if "choices" in response and response["choices"]:
-                    return response["choices"][0]["message"]["content"]
-                return "No response generated"
+                return self._extract_openai_compatible_text(response)
 
         except Exception as e:
             raise Exception(f"{self.provider_name.title()} API error: {str(e)}")
@@ -435,9 +465,9 @@ class GoogleProvider(AIProvider):
                             res["thought_signature"] = part.thought_signature
                             break
                     return res
-                return text_content or "No response generated"
+                return text_content
 
-            return "No response generated"
+            return ""
 
         except Exception as e:
             raise Exception(f"Google API error: {str(e)}")
@@ -1587,6 +1617,7 @@ class AIEngine:
         confirmation_manager = None,
         memory_manager = None,
         recursion_depth: int = 0,
+        allow_empty_retry: bool = True,
     ):
         """Stream AI response with native tool support and automatic continuation"""
         import json
@@ -1640,7 +1671,11 @@ class AIEngine:
                             start_idx = chunk.find("```json")
                             # Yield text before the block
                             if start_idx > 0:
-                                yield chunk[:start_idx]
+                                formatted_thinking = self._format_thinking_text(chunk[:start_idx])
+                                if formatted_thinking:
+                                    yield formatted_thinking
+                                else:
+                                    yield chunk[:start_idx]
                             
                             json_mode = True
                             json_buffer = chunk[start_idx:]
@@ -1834,13 +1869,45 @@ class AIEngine:
                     project_path,
                     confirmation_manager,
                     memory_manager,
-                    recursion_depth + 1
+                    recursion_depth + 1,
+                    allow_empty_retry
                 ):
                     yield chunk
             else:
                 # No more tools, this is the final final response part of the turn
-                if memory_manager and turn_response:
-                    memory_manager.add_message("assistant", turn_response)
+                if turn_response.strip():
+                    if memory_manager:
+                        memory_manager.add_message("assistant", turn_response)
+                elif allow_empty_retry and recursion_depth == 0:
+                    # Some providers occasionally end a stream without text or tool calls.
+                    # Retry once with non-streaming generation before failing the turn.
+                    retry_response = await ai_provider.generate_response(
+                        messages=messages,
+                        model=model,
+                        tools=tools,
+                        max_tokens=max_tokens or 16384,
+                        temperature=config.get("temperature", 0.7),
+                    )
+                    retry_text = ""
+                    if isinstance(retry_response, dict):
+                        retry_text = (retry_response.get("content") or "").strip()
+                    elif isinstance(retry_response, str):
+                        retry_text = retry_response.strip()
+
+                    if retry_text:
+                        yield retry_text + "\n"
+                        if memory_manager:
+                            memory_manager.add_message("assistant", retry_text)
+                    else:
+                        fallback = "[No response generated by provider. Please retry.]"
+                        yield fallback + "\n"
+                        if memory_manager:
+                            memory_manager.add_message("assistant", fallback)
+                elif recursion_depth == 0:
+                    fallback = "[No response generated by provider. Please retry.]"
+                    yield fallback + "\n"
+                    if memory_manager:
+                        memory_manager.add_message("assistant", fallback)
             
         except Exception as e:
             import traceback
@@ -2366,6 +2433,40 @@ class AIEngine:
 
         # Don't strip during streaming - preserves spaces between chunks
         return cleaned
+
+    def _format_thinking_text(self, text: str) -> str:
+        """Format verbose planning/thinking text into a compact, readable block."""
+        import re
+
+        cleaned = self._clean_model_syntax(text or "")
+        if not cleaned.strip():
+            return ""
+
+        # Remove inline tool-call payloads from displayed reasoning
+        cleaned = re.sub(r"```json\s*.*?```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+        cleaned = re.sub(r"\{[\s\S]*?\"tool_code\"[\s\S]*?\}", "", cleaned, flags=re.IGNORECASE)
+        cleaned = cleaned.strip()
+        if not cleaned:
+            return ""
+
+        # Split and dedupe repetitive thought fragments
+        parts = [p.strip() for p in re.split(r"[.\n]+", cleaned) if p and p.strip()]
+        seen = set()
+        unique_parts = []
+        for part in parts:
+            key = re.sub(r"\s+", " ", part.lower()).strip()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_parts.append(part)
+            if len(unique_parts) >= 6:
+                break
+
+        if not unique_parts:
+            return ""
+
+        lines = [f"- {p}" for p in unique_parts]
+        return "\nTHINKING:\n" + "\n".join(lines) + "\n"
 
     async def _process_response_with_tools(
         self,

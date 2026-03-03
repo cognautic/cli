@@ -984,6 +984,10 @@ def chat(provider, model, project_path, websocket_port, session):
                         esc_monitor = EscKeyMonitor()
                         
                         try:
+                            confirmation_manager.set_prompt_hooks(
+                                on_prompt_start=lambda: status.stop(),
+                                on_prompt_end=lambda: status.start(),
+                            )
                             esc_monitor.start()
                             async for chunk in ai_engine.process_message_stream(
                                 user_input, 
@@ -1002,6 +1006,7 @@ def chat(provider, model, project_path, websocket_port, session):
                                     console.print("\n[dim]Response stopped (Esc pressed)[/dim]")
                                     break
                         finally:
+                            confirmation_manager.set_prompt_hooks(None, None)
                             status.stop()
                             esc_monitor.stop()
                             # Re-enable Ctrl+C after AI response
@@ -1671,6 +1676,7 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 for idx, session in enumerate(sessions[:10], 1):  # Show last 10 sessions with index
                     console.print(f"   [{idx}] {session.session_id} - {session.title}")
                     console.print(f"      {session.message_count} messages, {session.provider}")
+                    console.print(f"      Workspace: {session.workspace or '-'}")
                     console.print(f"      Last updated: {session.last_updated}")
                     console.print()
         
