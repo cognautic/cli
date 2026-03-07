@@ -1368,6 +1368,14 @@ class AIEngine:
         )
         self._initialize_providers()
 
+    def refresh_providers(self):
+        """Reload configured providers so updated API keys/endpoints apply immediately."""
+        preserved_local = self.providers.get("local")
+        self.providers = {}
+        if preserved_local is not None:
+            self.providers["local"] = preserved_local
+        self._initialize_providers()
+
     def _initialize_providers(self):
         """Initialize available AI providers"""
         # Get all supported providers from endpoints
@@ -1921,6 +1929,13 @@ class AIEngine:
             lines.extend(content_lines)
         return "\n" + "\n".join(lines) + "\n"
 
+    def _format_tool_execution(self, action: str, details: list | None = None) -> str:
+        """Format tool execution like compact terminal output."""
+        lines = [action]
+        if details:
+            lines.extend(details)
+        return "\n" + "\n".join(lines) + "\n"
+
     async def _execute_single_tool_live(
         self, tool_call: dict, project_path: str, tool_results: list, confirmation_manager = None
     ):
@@ -1943,13 +1958,10 @@ class AIEngine:
                     answer = result.data.get("answer", "") if isinstance(result.data, dict) else ""
                     
                     # Display the tool result
-                    content = [
-                        f"Tool: {tool_name}",
-                        "",
-                        "Result:",
+                    details = [
                         json.dumps(result.data, indent=2) if isinstance(result.data, dict) else str(result.data)
                     ]
-                    box = self._format_tool_box(f"TOOL: {tool_name}", content)
+                    box = self._format_tool_execution(f"Ran {tool_name}", details)
                     yield box
                     
                     # Add to tool results with special marker for continuation
@@ -1961,8 +1973,7 @@ class AIEngine:
                         "success": True
                     })
                 else:
-                    content = [str(result.error)]
-                    box = self._format_tool_box(f"ERROR: {tool_name}", content)
+                    box = self._format_tool_execution(f"Ran {tool_name}", [f"(error) {result.error}"])
                     yield box
                     tool_results.append(
                         {"type": "error", "error": result.error, "success": False}
@@ -1983,7 +1994,7 @@ class AIEngine:
                     if not confirmed:
                         # User cancelled the operation
                         content = ["Operation cancelled by user"]
-                        box = self._format_tool_box("CANCELLED: command_runner", content)
+                        box = self._format_tool_execution("Ran command_runner", ["(cancelled) Operation cancelled by user"])
                         yield box
                         tool_results.append({"type": "cancelled", "tool": "command_runner", "success": False})
                         return
@@ -2005,14 +2016,11 @@ class AIEngine:
                         process_id = result.data.get("process_id", "unknown")
                         pid = result.data.get("pid", "unknown")
                         content = [
-                            f"Command: {command}",
-                            f"Status:  Running in background",
-                            f"Process: {process_id} (PID: {pid})",
-                            f"Tip:     Use /ct {process_id} to terminate",
+                            f"(background) pid={pid} process_id={process_id}",
+                            f"command: {command}",
+                            f"tip: /ct {process_id} to terminate",
                         ]
-                        box = self._format_tool_box(
-                            "TOOL: command_runner (background)", content
-                        )
+                        box = self._format_tool_execution("Ran command_runner", content)
                         yield box
                         tool_results.append(
                             {"type": "command", "command": command, "success": True}
@@ -2040,15 +2048,16 @@ class AIEngine:
                             )
 
                         # Show output preview in the box
-                        content = [f"Command: {command}", "", "Output:"]
-                        # Add first few lines of output to box
                         output_lines = display_output.split("\n")[:10]
-                        for line in output_lines:
-                            content.append(line[:57])  # Truncate long lines
-                        if len(display_output.split("\n")) > 10:
-                            content.append("...")
+                        details = [f"command: {command}"]
+                        if full_output.strip():
+                            details.extend(output_lines)
+                            if len(display_output.split("\n")) > 10:
+                                details.append("...")
+                        else:
+                            details.append("(no output)")
 
-                        box = self._format_tool_box("TOOL: command_runner", content)
+                        box = self._format_tool_execution("Ran command_runner", details)
                         yield box
 
                         # Add to tool results with output for continuation
@@ -2061,8 +2070,7 @@ class AIEngine:
                             }
                         )
                 else:
-                    content = [str(result.error)]
-                    box = self._format_tool_box("ERROR: command_runner", content)
+                    box = self._format_tool_execution("Ran command_runner", [f"(error) {result.error}"])
                     yield box
                     tool_results.append(
                         {"type": "error", "error": result.error, "success": False}
@@ -2093,7 +2101,7 @@ class AIEngine:
                         if not confirmed:
                             # User cancelled the operation
                             content = ["Operation cancelled by user"]
-                            box = self._format_tool_box("CANCELLED: file_operations", content)
+                            box = self._format_tool_execution("Ran file_operations", ["(cancelled) Operation cancelled by user"])
                             yield box
                             tool_results.append({"type": "cancelled", "tool": "file_operations", "success": False})
                             return
@@ -2116,18 +2124,16 @@ class AIEngine:
                         )
                         
                         # Build tool box with content preview
-                        content = [f"Operation: {operation}", f"File:      {file_path}"]
+                        details = [f"operation: {operation}", f"file: {file_path}"]
                         if file_content.strip():
-                            content.append("")
-                            content.append("Content Preview:")
-                            content_lines = file_content.split("\n")[:10]
-                            for line in content_lines:
-                                truncated_line = line[:57]
-                                content.append(truncated_line)
+                            preview_lines = file_content.split("\n")[:10]
+                            details.extend(line[:100] for line in preview_lines)
                             if len(file_content.split("\n")) > 10:
-                                content.append("...")
-                        
-                        box = self._format_tool_box("TOOL: file_operations", content)
+                                details.append("...")
+                        else:
+                            details.append("(no output)")
+
+                        box = self._format_tool_execution("Ran file_operations", details)
                         yield box
                         
                         # Add to tool_results with FULL content for continuation
@@ -2139,7 +2145,7 @@ class AIEngine:
                         })
                     else:
                         # Other operations (write, create, etc.)
-                        content = [f"Operation: {operation}", f"File:      {file_path}"]
+                        details = [f"operation: {operation}", f"file: {file_path}"]
 
                         # Show diff for content-changing operations
                         if isinstance(result.data, dict):
@@ -2160,17 +2166,18 @@ class AIEngine:
                                     n=3,
                                 )
 
-                                content.append("")
-                                content.append("Diff:")
                                 for line in diff:
                                     line = line.rstrip()
                                     # Skip file markers
                                     if line.startswith("---") or line.startswith("+++"):
                                         continue
                                     # Only show + and - signs for diff lines, no colors
-                                    content.append(line)
+                                    details.append(line)
 
-                        box = self._format_tool_box("TOOL: file_operations", content)
+                        if len(details) == 2:
+                            details.append("(no output)")
+
+                        box = self._format_tool_execution("Ran file_operations", details)
                         yield box
 
                         # Add to tool results
@@ -2184,8 +2191,7 @@ class AIEngine:
                             result_info["modified"] = True
                         tool_results.append(result_info)
                 else:
-                    content = [str(result.error)]
-                    box = self._format_tool_box("ERROR: file_operations", content)
+                    box = self._format_tool_execution("Ran file_operations", [f"(error) {result.error}"])
                     yield box
                     tool_results.append(
                         {"type": "error", "error": result.error, "success": False}
@@ -2201,24 +2207,22 @@ class AIEngine:
                     query = args.get("query", "N/A")
                     
                     # Format for UI
-                    content = [f"Operation: {operation}"]
+                    details = [f"operation: {operation}"]
                     if query != "N/A":
-                        content.append(f"Query:     {query}")
+                        details.append(f"query: {query}")
                     
                     if isinstance(result.data, list):
-                        # It's a list of results
-                        content.append(f"Found {len(result.data)} results")
+                        details.append(f"found {len(result.data)} results")
                         for i, item in enumerate(result.data[:3]):
                             title = item.get('title', 'No title')
-                            content.append(f"{i+1}. {title[:50]}...")
+                            details.append(f"{i+1}. {title[:80]}")
                     elif isinstance(result.data, dict):
-                        # It might be fetch_url_content result
                         url = result.data.get('url', 'unknown')
-                        content.append(f"URL: {url}")
+                        details.append(f"url: {url}")
                         text_len = result.data.get('length', 0)
-                        content.append(f"Length: {text_len} chars")
+                        details.append(f"length: {text_len} chars")
                     
-                    box = self._format_tool_box("TOOL: web_search", content)
+                    box = self._format_tool_execution("Ran web_search", details)
                     yield box
 
                     # Add to tool results with FULL results
@@ -2230,8 +2234,7 @@ class AIEngine:
                         "success": True
                     })
                 else:
-                    content = [str(result.error)]
-                    box = self._format_tool_box("ERROR: web_search", content)
+                    box = self._format_tool_execution("Ran web_search", [f"(error) {result.error}"])
                     yield box
                     tool_results.append(
                         {"type": "error", "error": result.error, "success": False}
@@ -2247,21 +2250,22 @@ class AIEngine:
                     file_path = args.get("file_path", "N/A")
 
                     # Show file content preview for read operations
-                    content = [f"Operation: {operation}", f"File:      {file_path}"]
+                    details = [f"operation: {operation}", f"file: {file_path}"]
 
                     # Add preview of content
                     if isinstance(result.data, dict) and "content" in result.data:
                         file_content = result.data["content"]
                         lines = file_content.split("\n")[:5]  # First 5 lines
                         if lines:
-                            content.append("")
-                            content.append("Content (first 5 lines):")
                             for line in lines:
-                                content.append(line[:57])  # Truncate long lines
+                                details.append(line[:100])  # Truncate long lines
                             if len(file_content.split("\n")) > 5:
-                                content.append("...")
+                                details.append("...")
 
-                    box = self._format_tool_box("TOOL: file_reader", content)
+                    if len(details) == 2:
+                        details.append("(no output)")
+
+                    box = self._format_tool_execution("Ran file_reader", details)
                     yield box
 
                     # Add to tool results with content for continuation
@@ -2277,8 +2281,56 @@ class AIEngine:
                         ]  # First 500 chars
                     tool_results.append(result_info)
                 else:
-                    content = [str(result.error)]
-                    box = self._format_tool_box("ERROR: file_reader", content)
+                    box = self._format_tool_execution("Ran file_reader", [f"(error) {result.error}"])
+                    yield box
+                    tool_results.append(
+                        {"type": "error", "error": result.error, "success": False}
+                    )
+
+            elif tool_name in {"planner", "update_plan"}:
+                result = await self.tool_registry.execute_tool(
+                    tool_name, user_id="ai_engine", **args
+                )
+
+                if result.success:
+                    result_data = result.data if isinstance(result.data, dict) else {}
+                    details = []
+
+                    objective = result_data.get("objective")
+                    if objective:
+                        details.append(f"objective: {objective}")
+
+                    plan_id = result_data.get("plan_id")
+                    if plan_id:
+                        details.append(f"plan_id: {plan_id}")
+
+                    explanation = result_data.get("explanation") or result_data.get("last_update")
+                    if explanation:
+                        details.append(f"update: {explanation}")
+
+                    steps = result_data.get("steps", [])
+                    if steps:
+                        for index, step in enumerate(steps, start=1):
+                            status = str(step.get("status", "pending")).replace("_", " ")
+                            label = step.get("step", "")
+                            details.append(f"{index}. [{status}] {label}")
+
+                    if not details:
+                        details.append("(no output)")
+
+                    box = self._format_tool_execution(f"Ran {tool_name}", details)
+                    yield box
+                    tool_results.append(
+                        {
+                            "type": tool_name,
+                            "tool": tool_name,
+                            "plan_id": plan_id,
+                            "result": result_data,
+                            "success": True,
+                        }
+                    )
+                else:
+                    box = self._format_tool_execution(f"Ran {tool_name}", [f"(error) {result.error}"])
                     yield box
                     tool_results.append(
                         {"type": "error", "error": result.error, "success": False}
@@ -2291,8 +2343,7 @@ class AIEngine:
                 tool = self.tool_registry.get_tool(tool_name)
                 
                 if not tool:
-                    content = [f"Unknown tool: {tool_name}"]
-                    box = self._format_tool_box("ERROR: Unknown Tool", content)
+                    box = self._format_tool_execution(f"Ran {tool_name}", [f"(error) Unknown tool: {tool_name}"])
                     yield box
                     tool_results.append(
                         {"type": "error", "error": f"Unknown tool: {tool_name}", "success": False}
@@ -2324,14 +2375,12 @@ class AIEngine:
                         result_str = result_str[:5000] + "\n\n... [Output truncated]"
                     
                     # Create formatted output
-                    content = [f"Tool: {tool_name}", "", "Result:"]
-                    result_lines = result_str.split('\n')[:20]  # First 20 lines
-                    for line in result_lines:
-                        content.append(line[:100])  # Truncate long lines
-                    if len(result_str.split('\n')) > 20:
-                        content.append("...")
-                    
-                    box = self._format_tool_box(f"TOOL: {tool_name}", content)
+                    details = result_str.split('\n')[:20] if result_str.strip() else ["(no output)"]
+                    details = [line[:100] for line in details]
+                    if result_str.strip() and len(result_str.split('\n')) > 20:
+                        details.append("...")
+
+                    box = self._format_tool_execution(f"Ran {tool_name}", details)
                     yield box
                     
                     tool_results.append({
@@ -2341,16 +2390,14 @@ class AIEngine:
                         "success": True
                     })
                 else:
-                    content = [str(result.error)]
-                    box = self._format_tool_box(f"ERROR: {tool_name}", content)
+                    box = self._format_tool_execution(f"Ran {tool_name}", [f"(error) {result.error}"])
                     yield box
                     tool_results.append(
                         {"type": "error", "error": result.error, "success": False}
                     )
 
         except Exception as e:
-            content = [str(e)]
-            box = self._format_tool_box("TOOL ERROR", content)
+            box = self._format_tool_execution("Ran tool", [f"(error) {e}"])
             yield box
             tool_results.append({"type": "error", "error": str(e), "success": False})
 
@@ -2690,6 +2737,8 @@ UNDERSTANDING USER CONTEXT (CRITICAL):
 IMPORTANT: You have access to tools that you MUST use when appropriate. Don't just provide code examples - actually create files and execute commands when the user asks for them.
 
 TOOL USAGE RULES:
+- For coding or multi-step tasks, call the planner tool first to show the execution steps before doing substantial work
+- After progress changes, call update_plan to keep the visible plan in sync
 - When a user asks you to "create", "build", "make" files or projects, you MUST use the file_operations tool to create ALL necessary files
 - CREATE EACH FILE SEPARATELY: Use one tool call per file - do NOT try to create multiple files in a single tool call
 - When you need to run commands, use the command_runner tool
@@ -2730,6 +2779,7 @@ WEB SEARCH TOOL USAGE (CRITICAL - WHEN TO USE):
 
 CRITICAL: NEVER DESCRIBE PLANS WITHOUT EXECUTING THEM
 - DO NOT say "I will create X, Y, and Z files" and then only create X
+- Do not describe a plan in plain text first; use the planner tool so the user can see the steps
 - If you mention you will do something, you MUST include the tool calls to actually do it
 - Either execute ALL the tool calls you describe, or don't describe them at all
 - Keep explanatory text BRIEF - focus on executing tool calls
@@ -3088,6 +3138,8 @@ Available tools:
 """
 
         # Add built-in tools
+        prompt += "- planner: Create a visible step-by-step plan for the current task\n"
+        prompt += "- update_plan: Update the visible plan as work progresses\n"
         prompt += "- file_operations: Create, read, write, delete files\n"
         prompt += "- file_reader: Read files, grep search, list directories\n"
         prompt += "- command_runner: Execute shell commands (use run_async_command for long tasks)\n"
@@ -3225,10 +3277,12 @@ REMEMBER: Ask questions EARLY before starting implementation, not after!
         prompt += """
 REMEMBER:
 1. Use tools to actually perform actions, don't just provide code examples.
-2. Complete entire requests in one response.
-3. Don't stop after one file when the user asked for complete functionality.
-4. NEVER promise to do something without including the tool calls to actually do it!
-5. For very long file content, the system will automatically handle it - just provide the full content
+2. For coding and other multi-step tasks, create a concise plan with the planner tool before substantial work.
+3. Update that plan with update_plan when steps move from pending to in_progress or completed.
+4. Complete entire requests in one response.
+5. Don't stop after one file when the user asked for complete functionality.
+6. NEVER promise to do something without including the tool calls to actually do it!
+7. For very long file content, the system will automatically handle it - just provide the full content
 
 ═══════════════════════════════════════════════════════════════════════════════
 🎯 PROJECT COMPLETION CHECKLIST - MANDATORY FOR ALL PROJECT REQUESTS

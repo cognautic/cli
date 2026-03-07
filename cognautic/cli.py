@@ -1267,6 +1267,10 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     continue
 
                 config_manager.set_api_key(provider, api_key)
+                try:
+                    ai_engine.refresh_providers()
+                except Exception:
+                    pass
                 console.print(f"SUCCESS: API key set for {provider}", style="green")
             elif choice == "2":
                 console.print_json(data=config_manager.get_config())
@@ -1311,7 +1315,7 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                     continue
                 config_manager.set_provider_endpoint("custom_openai", base_url)
                 try:
-                    ai_engine._initialize_providers()
+                    ai_engine.refresh_providers()
                 except Exception:
                     pass
                 console.print(f"SUCCESS: Set custom_openai base URL to {base_url}", style="green")
@@ -1405,6 +1409,10 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 console.print("INFO: API key update cancelled")
             else:
                 config_manager.set_api_key(provider, api_key)
+                try:
+                    ai_engine.refresh_providers()
+                except Exception:
+                    pass
                 console.print(f"SUCCESS: API key set for {provider}", style="green")
         elif parts[1] == "get" and len(parts) >= 3:
             value = config_manager.get_config_value(parts[2])
@@ -1464,7 +1472,7 @@ async def handle_slash_command(command, config_manager, ai_engine, context):
                 # Ensure provider is initialized in current runtime after new key config.
                 if new_provider not in ai_engine.providers:
                     try:
-                        ai_engine._initialize_providers()
+                        ai_engine.refresh_providers()
                     except Exception as e:
                         console.print(f"ERROR: Failed to initialize provider {new_provider}: {e}", style="red")
                         return True

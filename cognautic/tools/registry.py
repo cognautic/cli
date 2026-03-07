@@ -52,8 +52,14 @@ class ToolRegistry:
         from .code_navigation import CodeNavigationTool
         from .codebase_search import CodebaseSearchTool
         from .ask_question import AskQuestionTool
+        from .planner import PlannerTool, UpdatePlanTool
+
+        planner_tool = PlannerTool()
+        update_plan_tool = UpdatePlanTool(planner_tool)
         
         # Register tools
+        self.register_tool(planner_tool)
+        self.register_tool(update_plan_tool)
         self.register_tool(FileOperationsTool())
         self.register_tool(CommandRunnerTool())
         self.register_tool(WebSearchTool())

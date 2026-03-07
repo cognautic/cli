@@ -5,6 +5,19 @@ All notable changes to Cognautic CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.7] - 2026-03-07
+
+### Added
+- New `planner` tool to create a visible task plan before substantial multi-step work.
+- New `update_plan` tool to update visible plan progress as steps move through execution.
+
+### Changed
+- Tool execution output now uses a compact terminal-style `Ran ...` format with `(no output)` for empty results.
+- System prompt guidance now directs the model to use `planner` and `update_plan` for multi-step task progress.
+
+### Fixed
+- API key and provider endpoint changes now refresh in-memory providers immediately, removing the need to restart the CLI for new credentials to apply.
+
 ## [1.2.6] - 2026-03-03
 
 ### Added
