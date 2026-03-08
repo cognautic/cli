@@ -26,6 +26,7 @@ psutil>=5.9.0
 # Security
 cryptography>=3.4.0
 keyring>=23.0.0
+pyyaml>=6.0
 
 # Development
 pytest>=7.0.0

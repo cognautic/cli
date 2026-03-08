@@ -15,6 +15,7 @@ requirements = [
     "psutil>=5.9.0",
     "cryptography>=3.4.0",
     "keyring>=23.0.0",
+    "pyyaml>=6.0",
 ]
 
 # Optional AI provider dependencies
@@ -41,7 +42,7 @@ extras_require = {
 
 setup(
     name="cognautic-cli",
-    version="1.2.6",
+    version="1.2.8",
     author="Cognautic",
     author_email="cognautic@gmail.com",
     description="A Python-based CLI AI coding agent that provides agentic development capabilities with multi-provider AI support and real-time interaction",

@@ -6,7 +6,7 @@ import asyncio
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from .auto_continuation import AutoContinuationManager
 from .config import ConfigManager

@@ -5,6 +5,12 @@ All notable changes to Cognautic CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.8] - 2026-03-08
+
+### Fixed
+- Added `PyYAML` to core install dependencies so CLI startup no longer fails with `ModuleNotFoundError: No module named 'yaml'`.
+- Added the missing `AsyncGenerator` typing import so `ai_engine.py` no longer fails at import time on Python 3.13 with `NameError: name 'AsyncGenerator' is not defined`.
+
 ## [1.2.7] - 2026-03-07
 
 ### Added
